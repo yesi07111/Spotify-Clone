@@ -11,32 +11,46 @@ export const getTrackImageUrl = (trackTitle, trackId) => {
         .replace(/^[-_]+/, '')
         .replace(/[-_]+$/, '');
 
-    const specificImageUrl = `/images/${imageName}.jpg`;
+    // Primero intentar con ambos formatos
+    const jpgUrl = `/images/${imageName}.jpg`;
+    const pngUrl = `/images/${imageName}.png`;
 
-    // Verificar si la imagen existe (usando una técnica de precarga)
-    return checkImageExists(specificImageUrl)
-        ? specificImageUrl
-        : getRandomDefaultImage(trackId);
+    // Verificar si alguna de las imágenes existe
+    if (checkImageExists(jpgUrl)) {
+        return jpgUrl;
+    } else if (checkImageExists(pngUrl)) {
+        return pngUrl;
+    } else {
+        return getRandomDefaultImage(trackId);
+    }
 };
 
 export const getRandomDefaultImage = (seed) => {
-    // Número de imágenes por defecto disponibles
-    const defaultImageCount = 5;
-
-    // Usar el ID de la canción como semilla para consistencia, o generar aleatorio
+    const defaultImageCount = 3;
     const randomIndex = seed
         ? (parseInt(seed) % defaultImageCount) + 1
         : Math.floor(Math.random() * defaultImageCount) + 1;
 
-    return `/images/default/default${randomIndex}.jpg`;
+    // Intentar con PNG primero, luego JPG
+    const pngUrl = `/images/default/default${randomIndex}.png`;
+    const jpgUrl = `/images/default/default${randomIndex}.jpg`;
+
+    return checkImageExists(pngUrl) ? pngUrl : jpgUrl;
 };
 
 export const checkImageExists = (url) => {
-    // Esta es una verificación básica por ahora
     const knownImages = [
         'bohemian_rhapsody',
     ];
 
-    const imageName = url.split('/').pop().replace('.jpg', '');
+    const imageName = url.split('/').pop().replace('.jpg', '').replace('.png', '');
     return knownImages.includes(imageName);
+};
+
+// Función mejorada que maneja errores de carga de imágenes
+export const loadImageWithFallback = (url, fallbackUrl, callback) => {
+    const img = new Image();
+    img.onload = () => callback(url);
+    img.onerror = () => callback(fallbackUrl);
+    img.src = url;
 };
