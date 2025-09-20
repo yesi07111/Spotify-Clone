@@ -41,7 +41,7 @@
     </div>
 
     <div class="progress-container">
-      <span class="progress-time">{{ formattedElapsedTime }}</span>
+      <span class="progress-time">{{ formattedRemainingTime }}</span>
       <input 
         type="range" 
         class="progress-slider" 
@@ -65,10 +65,12 @@ export default {
     ...mapState('player', [
       'isPlaying',
       'formattedElapsedTime',
+      'formattedRemainingTime', // added
       'formattedTotalDuration',
       'playbackProgress',
       'isShuffleActive',
-      'isRepeatActive'
+      'isRepeatActive',
+      'volume' // added
     ])
   },
   methods: {
@@ -78,7 +80,8 @@ export default {
       'playPreviousTrack',
       'seekToPosition',
       'toggleShuffle',
-      'toggleRepeat'
+      'toggleRepeat',
+      'setVolume' // added
     ])
   }
 }
