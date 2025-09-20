@@ -303,3 +303,70 @@
 .volume-slider:hover::-webkit-slider-thumb {
     background: var(--color-primary);
 }
+
+.add-track-form,
+.add-artist-form,
+.add-album-form {
+    background: #000;
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(13, 110, 253, 0.08);
+    border: 1px solid rgba(13, 110, 253, 0.15);
+}
+
+.add-track-form .form-label,
+.add-artist-form .form-label,
+.add-album-form .form-label {
+    color: #cfe8ff;
+}
+
+.add-track-form .form-control,
+.add-artist-form .form-control,
+.add-album-form .form-control,
+.add-track-form .form-select,
+.add-artist-form .form-select,
+.add-album-form .form-select {
+    background: #0a0a0a;
+    color: #e6f3ff;
+    border: 1px solid rgba(13, 110, 253, 0.15);
+}
+
+.add-track-form .form-control:focus,
+.add-artist-form .form-control:focus,
+.add-album-form .form-control:focus,
+.add-track-form .form-select:focus,
+.add-artist-form .form-select:focus,
+.add-album-form .form-select:focus {
+    outline: none;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.12);
+    border-color: #0d6efd;
+}
+
+.add-track-form .btn-primary,
+.add-artist-form .btn-primary,
+.add-album-form .btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(13, 110, 253, 0.18);
+}
+
+.add-track-form .btn-secondary,
+.add-artist-form .btn-secondary,
+.add-album-form .btn-secondary {
+    background-color: #0b1220;
+    border-color: rgba(255, 255, 255, 0.06);
+    color: #cfe8ff;
+}
+
+.add-track-form small.text-danger,
+.add-artist-form small.text-danger,
+.add-album-form small.text-danger {
+    color: #ffb3b3;
+}
+
+.add-track-form small.text-success,
+.add-artist-form small.text-success,
+.add-album-form small.text-success {
+    color: #bfe6b3;
+}
