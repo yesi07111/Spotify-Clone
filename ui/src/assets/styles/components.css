@@ -1,0 +1,419 @@
+@import './variables.css';
+
+/* Layout principal */
+.main-container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    flex-direction: row-reverse;
+    /* Cambio: ahora el reproductor está a la derecha */
+}
+
+/* Barra de navegación */
+.navigation-bar {
+    height: var(--navbar-height);
+    background-color: var(--color-dark-light);
+    border-bottom: 1px solid var(--color-dark-lighter);
+    padding: 0 var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 1000;
+}
+
+.navigation-brand {
+    display: flex;
+    align-items: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--color-gray-light);
+}
+
+.navigation-brand-icon {
+    margin-right: var(--spacing-sm);
+    color: var(--color-primary);
+    /* Cambiado a azul */
+}
+
+/* Botones de control */
+.control-button {
+    background: none;
+    border: none;
+    color: var(--color-gray-light);
+    /* Blanco por defecto */
+    font-size: 1.2rem;
+    padding: 0 var(--spacing-sm);
+    margin: 0 var(--spacing-xs);
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.control-button:hover {
+    color: var(--color-primary);
+    /* Azul al hacer hover */
+}
+
+.control-button-primary {
+    font-size: 2.2rem;
+    color: var(--color-gray-light);
+}
+
+.control-button-primary:hover {
+    color: var(--color-primary);
+}
+
+.control-button-active {
+    color: var(--color-primary);
+}
+
+/* Barra de búsqueda */
+@import './variables.css';
+
+/* Barra de búsqueda - Contenedor exterior negro */
+.search-container {
+    margin-bottom: var(--spacing-xl);
+    background-color: var(--color-dark-light);
+    /* Fondo negro */
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    border: 1px solid var(--color-dark-lighter);
+    /* Borde más oscuro para contraste */
+}
+
+/* Grupo de input con fondo blanco */
+.search-container .input-group {
+    background-color: var(--color-gray-light);
+    /* Fondo blanco */
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    /* Para que los bordes redondeados se apliquen correctamente */
+}
+
+/* Icono de búsqueda con fondo blanco */
+.search-container .input-group-text {
+    background-color: var(--color-gray-light);
+    /* Fondo blanco */
+    border: none;
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+/* Campo de entrada de texto */
+.search-input {
+    width: 100%;
+    background-color: var(--color-gray-light);
+    /* Fondo blanco */
+    border: none !important;
+    /* Eliminar borde por defecto */
+    padding: var(--spacing-sm) var(--spacing-md);
+    color: var(--color-dark);
+    /* Texto oscuro para contraste */
+    font-size: 1rem;
+}
+
+.search-input:focus {
+    outline: none;
+    box-shadow: none;
+    /* Eliminar sombra azul de Bootstrap al enfocar */
+}
+
+/* Botón de filtro */
+.search-container .btn-outline-secondary {
+    background-color: var(--color-gray-light);
+    /* Fondo blanco */
+    border: none;
+    color: var(--color-dark);
+    /* Texto oscuro */
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.search-container .btn-outline-secondary:hover {
+    background-color: var(--color-primary);
+    /* Fondo azul al pasar el mouse */
+    color: var(--color-gray-light);
+    /* Texto blanco al pasar el mouse */
+}
+
+/* Área de la canción actual */
+.current-track-container {
+    width: var(--sidebar-width);
+    background: linear-gradient(to bottom, var(--color-secondary-dark), var(--color-dark-light));
+    padding: var(--spacing-xl);
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--color-dark-lighter);
+}
+
+.current-track-info {
+    text-align: center;
+    padding: var(--spacing-xl);
+}
+
+.current-track-image {
+    width: 250px;
+    height: 250px;
+    object-fit: cover;
+    margin-bottom: var(--spacing-lg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+}
+
+.current-track-title {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-bottom: var(--spacing-xs);
+    color: var(--color-gray-light);
+}
+
+.current-track-details {
+    color: var(--color-gray);
+    margin-bottom: var(--spacing-md);
+}
+
+/* Área de la lista de canciones (izquierda) */
+.tracks-list-container {
+    width: var(--content-width);
+    overflow-y: auto;
+    padding: var(--spacing-xl);
+    background-color: var(--color-dark);
+}
+
+/* Elementos de la lista */
+.track-item {
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius);
+    transition: background-color 0.3s;
+    display: flex;
+    align-items: center;
+    margin-bottom: var(--spacing-sm);
+    cursor: pointer;
+}
+
+.track-item:hover {
+    background-color: var(--color-dark-lighter);
+}
+
+.track-item-image {
+    width: 50px;
+    height: 50px;
+    object-fit: cover;
+    border-radius: 4px;
+    margin-right: var(--spacing-md);
+}
+
+.track-item-info {
+    flex-grow: 1;
+}
+
+.track-item-title {
+    font-weight: 500;
+    margin-bottom: var(--spacing-xs);
+    color: var(--color-gray-light);
+}
+
+.track-item-details {
+    font-size: 0.875rem;
+    color: var(--color-gray);
+}
+
+.track-item-duration {
+    color: var(--color-gray);
+    font-size: 0.875rem;
+}
+
+/* Controles de reproducción */
+.player-controls-container {
+    margin-top: auto;
+    text-align: center;
+}
+
+.control-buttons {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+/* Barra de progreso */
+.progress-container {
+    margin: var(--spacing-lg) 0;
+    display: flex;
+    align-items: center;
+}
+
+.progress-time {
+    color: var(--color-gray);
+    font-size: 0.75rem;
+    width: 40px;
+}
+
+.progress-slider {
+    flex-grow: 1;
+    height: 4px;
+    background: var(--color-dark-lighter);
+    border-radius: 2px;
+    margin: 0 var(--spacing-sm);
+    appearance: none;
+    cursor: pointer;
+}
+
+.progress-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--color-gray-light);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.progress-slider:hover::-webkit-slider-thumb {
+    background: var(--color-primary);
+}
+
+/* Control de volumen */
+.volume-control-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: var(--spacing-lg);
+}
+
+.volume-icon {
+    color: var(--color-gray);
+    margin-right: var(--spacing-sm);
+}
+
+.volume-slider {
+    width: 100px;
+    height: 4px;
+    background: var(--color-dark-lighter);
+    border-radius: 2px;
+    appearance: none;
+    cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--color-gray-light);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.volume-slider:hover::-webkit-slider-thumb {
+    background: var(--color-primary);
+}
+
+.add-track-form,
+.add-artist-form,
+.add-album-form {
+    background: #000;
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(13, 110, 253, 0.08);
+    border: 1px solid rgba(13, 110, 253, 0.15);
+}
+
+.add-track-form .form-label,
+.add-artist-form .form-label,
+.add-album-form .form-label {
+    color: #cfe8ff;
+}
+
+.add-track-form .form-control,
+.add-artist-form .form-control,
+.add-album-form .form-control,
+.add-track-form .form-select,
+.add-artist-form .form-select,
+.add-album-form .form-select {
+    background: #0a0a0a;
+    color: #e6f3ff;
+    border: 1px solid rgba(13, 110, 253, 0.15);
+}
+
+.add-track-form .form-control:focus,
+.add-artist-form .form-control:focus,
+.add-album-form .form-control:focus,
+.add-track-form .form-select:focus,
+.add-artist-form .form-select:focus,
+.add-album-form .form-select:focus {
+    outline: none;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.12);
+    border-color: #0d6efd;
+}
+
+.add-track-form .btn-primary,
+.add-artist-form .btn-primary,
+.add-album-form .btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(13, 110, 253, 0.18);
+}
+
+.add-track-form .btn-secondary,
+.add-artist-form .btn-secondary,
+.add-album-form .btn-secondary {
+    background-color: #0b1220;
+    border-color: rgba(255, 255, 255, 0.06);
+    color: #cfe8ff;
+}
+
+.add-track-form small.text-danger,
+.add-artist-form small.text-danger,
+.add-album-form small.text-danger {
+    color: #ffb3b3;
+}
+
+.add-track-form small.text-success,
+.add-artist-form small.text-success,
+.add-album-form small.text-success {
+    color: #bfe6b3;
+}
+
+/* Botón primario azul */
+.btn-primary {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-gray-light);
+}
+
+.btn-primary:hover {
+    background-color: var(--color-primary-dark);
+    border-color: var(--color-primary-dark);
+    color: var(--color-gray-light);
+}
+
+.btn-primary:disabled {
+    background-color: var(--color-dark-lighter);
+    border-color: var(--color-dark-lighter);
+    color: var(--color-gray);
+}
+
+/* Botón outline info para los botones de toggle */
+.btn-outline-info {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.btn-outline-info:hover {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-gray-light);
+}
+
+/* Alertas en el formulario */
+.alert {
+    border: none;
+    border-radius: var(--border-radius);
+}
+
+.alert-danger {
+    background-color: rgba(220, 53, 69, 0.1);
+    color: #ff6b6b;
+}
+
+.alert-success {
+    background-color: rgba(25, 135, 84, 0.1);
+    color: #51cf66;
+}
