@@ -70,8 +70,17 @@ export default {
 .volume-control-container {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.75 rem;
   padding: 1rem;
+}
+
+.volume-control-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem; 
+  margin-top: 0.01rem; 
+  margin-bottom: 10rem;
 }
 
 .volume-icon {

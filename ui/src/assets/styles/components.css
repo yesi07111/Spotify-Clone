@@ -370,3 +370,50 @@
 .add-album-form small.text-success {
     color: #bfe6b3;
 }
+
+/* Botón primario azul */
+.btn-primary {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-gray-light);
+}
+
+.btn-primary:hover {
+    background-color: var(--color-primary-dark);
+    border-color: var(--color-primary-dark);
+    color: var(--color-gray-light);
+}
+
+.btn-primary:disabled {
+    background-color: var(--color-dark-lighter);
+    border-color: var(--color-dark-lighter);
+    color: var(--color-gray);
+}
+
+/* Botón outline info para los botones de toggle */
+.btn-outline-info {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.btn-outline-info:hover {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-gray-light);
+}
+
+/* Alertas en el formulario */
+.alert {
+    border: none;
+    border-radius: var(--border-radius);
+}
+
+.alert-danger {
+    background-color: rgba(220, 53, 69, 0.1);
+    color: #ff6b6b;
+}
+
+.alert-success {
+    background-color: rgba(25, 135, 84, 0.1);
+    color: #51cf66;
+}

@@ -9,7 +9,7 @@
     @click="selectTrack"
   >
     <div class="track-item-play-indicator">
-      <i v-if="isCurrentTrack && isPlaying" class="fas fa-volume-up text-success"></i>
+      <i v-if="isCurrentTrack && isPlaying" class="fas fa-volume-up text-primary"></i>
       <i v-else-if="isCurrentTrack" class="fas fa-pause text-warning"></i>
       <i v-else class="fas fa-play-circle track-item-play-icon"></i>
     </div>
