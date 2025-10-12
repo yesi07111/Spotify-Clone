@@ -1,4 +1,4 @@
-export const getTrackImageUrl = (trackTitle, trackId) => {
+export const getTrackImageUrl = (trackTitle) => {
     if (!trackTitle) return getRandomDefaultImage();
 
     // Crear un nombre de archivo válido a partir del título
@@ -21,15 +21,12 @@ export const getTrackImageUrl = (trackTitle, trackId) => {
     } else if (checkImageExists(pngUrl)) {
         return pngUrl;
     } else {
-        return getRandomDefaultImage(trackId);
+        return getRandomDefaultImage();
     }
 };
 
-export const getRandomDefaultImage = (seed) => {
-    const defaultImageCount = 3;
-    const randomIndex = seed
-        ? (parseInt(seed) % defaultImageCount) + 1
-        : Math.floor(Math.random() * defaultImageCount) + 1;
+export const getRandomDefaultImage = () => {
+    const randomIndex = 1 + Math.round(Math.random() * 2);
 
     // Intentar con PNG primero, luego JPG
     const pngUrl = `/images/default/default${randomIndex}.png`;
