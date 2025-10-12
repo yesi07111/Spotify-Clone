@@ -1,3 +1,4 @@
+<!-- VolumenControl.vue -->
 <template>
   <div class="volume-control-container">
     <i class="fas fa-volume-up volume-icon"></i>
