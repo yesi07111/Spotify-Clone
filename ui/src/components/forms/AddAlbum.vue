@@ -50,6 +50,7 @@
 
 <script>
 import { API_BASE_URL } from '@/utils/constants'
+import UploadService from '@/services/UploadService'
 
 export default {
   name: 'AddAlbum',
@@ -105,7 +106,8 @@ export default {
           throw new Error(errText || `HTTP ${res.status}`)
         }
 
-        const created = await res.json()
+        // const created = await res.json()
+        const created = await UploadService.createAlbum(payload)
         this.successMessage = 'Album agregado correctamente'
         this.resetFormFields()
         this.$emit('created', created)
