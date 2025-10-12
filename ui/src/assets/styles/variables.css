@@ -1,0 +1,30 @@
+:root {
+  /* Colores principales - Tema azul */
+  --color-primary: #1E90FF; /* Azul claro */
+  --color-primary-dark: #0077E6;
+  --color-primary-light: #87CEFA;
+  --color-secondary: #2D46B9;
+  --color-secondary-dark: #1E3160;
+  
+  /* Escala de grises */
+  --color-dark: #121212;
+  --color-dark-light: #181818;
+  --color-dark-lighter: #282828;
+  --color-gray: #B3B3B3;
+  --color-gray-light: #FFFFFF;
+  
+  /* Tamaños y espaciados */
+  --sidebar-width: 30%;
+  --content-width: 70%;
+  --navbar-height: 70px;
+  --player-height: 90px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* Bordes y sombras */
+  --border-radius: 8px;
+  --box-shadow: 0 4px 60px rgba(0, 0, 0, 0.5);
+}
