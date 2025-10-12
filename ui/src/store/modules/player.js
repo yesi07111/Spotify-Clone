@@ -1,389 +1,575 @@
-import AudioPlayerService from '@/services/AudioPlayerService' 
+import AudioPlayerService from '@/services/AudioPlayerService'
 import PlaylistManager from '@/services/PlaylistManager'
-import { formatTime } from '@/utils/audioHelper'
 
-const STREAMER_URL = process.env.VUE_APP_STREAMER_URL || 'http://127.0.0.1:8000/api/streamer'
+const REPEAT_MODES = {
+  OFF: 'off',
+  ALL: 'all',
+  ONE: 'one'
+}
 
 const state = {
-  audioPlayer: null,
+  audioService: null,
   playlistManager: null,
-  currentSong: {
-    name: '-----',
-    artist: '-----',
-    album: '-----'
-  },
+  currentSong: {},
   isPlaying: false,
-  formattedRemainingTime: '00:00',
-  formattedTotalDuration: '00:00',
-  progressBarProgress: 0,
+  currentTime: 0,
+  duration: 0,
+  formattedElapsedTime: '0:00',
+  formattedTotalDuration: '0:00',
+  playbackProgress: 0,
   volume: 50,
-  songs: [],
-  repeat: false,
-  filters: {
-    artist: null,
-    album: null,
-  }
+  previousVolume: 50, // Para guardar el volumen antes de mutear
+  isMuted: false,
+  isShuffleActive: false,
+  repeatMode: REPEAT_MODES.OFF,
+  loadingTrack: false,
+  chunksLoaded: 0,
+  totalChunks: 0,
+  loadProgress: 0,
+  originalTrackOrder: []
 }
 
 const mutations = {
-  SET_AUDIO_PLAYER(state, player) {
-    state.audioPlayer = player
+  SET_AUDIO_SERVICE(state, service) {
+    state.audioService = service
   },
+
   SET_PLAYLIST_MANAGER(state, manager) {
     state.playlistManager = manager
   },
-  SET_PLAYING(state, isPlaying) {
+
+  SET_CURRENT_SONG(state, song) {
+    state.currentSong = song || {}
+  },
+
+  SET_PLAYING_STATE(state, isPlaying) {
     state.isPlaying = isPlaying
   },
-  SET_TIMES(state, { remaining, total, progress }) {
-    state.formattedRemainingTime = remaining
-    state.formattedTotalDuration = total
-    state.progressBarProgress = progress
+
+  SET_PLAYBACK_TIME(state, { currentTime, duration }) {
+    state.currentTime = currentTime
+    state.duration = duration
   },
+
+  SET_PLAYBACK_PROGRESS(state, { currentTime, duration, progress }) {
+    state.currentTime = currentTime
+    state.duration = duration
+    state.playbackProgress = progress
+  },
+
+  SET_FORMATTED_TIMES(state, { elapsed, total }) {
+    state.formattedElapsedTime = elapsed
+    state.formattedTotalDuration = total
+  },
+
   SET_VOLUME(state, volume) {
     state.volume = volume
   },
-  SET_CURRENT_SONG(state, song) {
-    state.currentSong = {
-      name: song.title || song.name || '-----',
-      album: song.album_name || song.album || '-----',
-      artist: Array.isArray(song.artist_names) ? song.artist_names.join(', ') : (song.artist || '-----')
-    }
+
+  SET_PREVIOUS_VOLUME(state, volume) {
+    state.previousVolume = volume
   },
-  SET_SONGS(state, songs) {
-    state.songs = songs
+
+  SET_MUTED(state, isMuted) {
+    state.isMuted = isMuted
   },
-  SET_REPEAT(state, repeat) {
-    state.repeat = repeat
+
+  SET_SHUFFLE_ACTIVE(state, isActive) {
+    state.isShuffleActive = isActive
   },
-  SET_FILTERS(state, { album, artist }) {
-    state.filters = {
-      album: album,
-      artist: artist,
-    }
+
+  SET_REPEAT_MODE(state, mode) {
+    state.repeatMode = mode
+  },
+
+  SET_LOADING_TRACK(state, isLoading) {
+    state.loadingTrack = isLoading
+  },
+
+  SET_CHUNKS_PROGRESS(state, { loaded, total, progress }) {
+    state.chunksLoaded = loaded
+    state.totalChunks = total
+    state.loadProgress = progress || (total > 0 ? (loaded / total) * 100 : 0)
+  },
+
+  SET_ORIGINAL_TRACK_ORDER(state, tracks) {
+    state.originalTrackOrder = [...tracks]
   }
 }
 
 const actions = {
-  async initializeServices({ state, commit }) {
-    try {
-      if (!state.audioPlayer) {
-        let audioInst = null
-        try {
-          audioInst = new AudioPlayerService(STREAMER_URL)
-        } catch (err) {
-            console.warn('No AudioPlayer constructor found, audio features will be limited: ', err)
-        }
-        commit('SET_AUDIO_PLAYER', audioInst)
-      }
-
-      if (!state.playlistManager) {
-        try {
-          const pm = new PlaylistManager()
-          commit('SET_PLAYLIST_MANAGER', pm)
-        } catch (err) {
-          console.warn('PlaylistManager not available', err)
-          commit('SET_PLAYLIST_MANAGER', null)
-        }
-      }
-
-      if (state.audioPlayer && typeof state.audioPlayer.onPlaybackProgressUpdate === 'function') {
-        state.audioPlayer.onPlaybackProgressUpdate((progressData) => {
-          const elapsed = progressData.currentTime ?? null
-          const duration = progressData.duration ?? (state.audioPlayer.duration || state.currentSong.duration || 0)
-          if (elapsed != null && duration) {
-            const remainingTime = duration - elapsed
-            const formattedRemaining = formatTime(remainingTime)
-            const formattedTotal = formatTime(duration)
-            const progressPercent = Math.floor((elapsed / duration) * 100)
-            commit('SET_TIMES', { remaining: formattedRemaining, total: formattedTotal, progress: progressPercent })
-          }
-        })
-      }
-
-      return { audioPlayer: state.audioPlayer, playlistManager: state.playlistManager }
-    } catch (err) {
-      console.error('initializeServices error', err)
-      throw err
-    }
-  },
-
-  async playAudio({ state, commit, dispatch }, songId) {
-    if (!state.audioPlayer || !state.playlistManager) {
-      await dispatch('initializeServices')
+  initializeAudioService({ commit, state, dispatch }) {
+    if (state.audioService) {
+      return state.audioService
     }
 
-    try {
-      if (state.audioPlayer) {
-        if (typeof state.audioPlayer.start === 'function') {
-          await state.audioPlayer.start(songId, state.volume)
-        } else if (typeof state.audioPlayer.initializeAudioPlayer === 'function') {
-          await state.audioPlayer.initializeAudioPlayer(songId)
-        } else if (typeof state.audioPlayer.playTrack === 'function') {
-          await state.audioPlayer.playTrack(songId, state.volume)
-        } else {
-          console.warn('audioPlayer does not expose start/initializeAudioPlayer/playTrack')
-        }
-      }
+    const audioService = new AudioPlayerService()
 
-      // set playlist current
-      if (state.playlistManager && typeof state.playlistManager.setCurrentSong === 'function') {
-        state.playlistManager.setCurrentSong(songId)
-      } else if (state.playlistManager && typeof state.playlistManager.setCurrent === 'function') {
-        state.playlistManager.setCurrent(songId)
-      }
+    audioService.onPlaybackProgressUpdate = (data) => {
+      commit('SET_PLAYBACK_TIME', {
+        currentTime: data.currentTime,
+        duration: data.duration
+      })
 
-      commit('SET_PLAYING', true)
+      commit('SET_FORMATTED_TIMES', {
+        elapsed: data.formattedTime,
+        total: data.formattedDuration
+      })
 
-      let current = null
-      if (state.playlistManager && typeof state.playlistManager.getCurrentSong === 'function') {
-        current = state.playlistManager.getCurrentSong()
-      } else if (state.playlistManager && state.playlistManager.songs) {
-        current = state.playlistManager.songs.find(s => s.id === songId)
-      }
-
-      if (current) {
-        commit('SET_CURRENT_SONG', current)
-      }
-
-      setTimeUpdater(state, commit)
-
-      if (state.audioPlayer) {
-        state.audioPlayer.onPlaybackEnd = async () => {
-          try {
-            if (!state.repeat && state.playlistManager && typeof state.playlistManager.next === 'function') {
-              state.playlistManager.next()
-            }
-            const nextSong = state.playlistManager && typeof state.playlistManager.getCurrentSong === 'function'
-              ? state.playlistManager.getCurrentSong()
-              : null
-            if (nextSong && nextSong.id) {
-              // start next
-              if (typeof state.audioPlayer.start === 'function') {
-                await state.audioPlayer.start(nextSong.id, state.volume)
-              } else if (typeof state.audioPlayer.initializeAudioPlayer === 'function') {
-                await state.audioPlayer.initializeAudioPlayer(nextSong.id)
-              }
-              commit('SET_PLAYING', true)
-              if (nextSong) commit('SET_CURRENT_SONG', nextSong)
-              setTimeUpdater(state, commit)
-            } else {
-              commit('SET_PLAYING', false)
-            }
-          } catch (err) {
-            console.error('onPlaybackEnd handler error', err)
-          }
-        }
-      }
-    } catch (err) {
-      console.error('playAudio error', err)
-      throw err
+      commit('SET_PLAYBACK_PROGRESS', {
+        currentTime: data.currentTime,
+        duration: data.duration,
+        progress: data.progress
+      })
     }
-  },
 
-  setVolume({ state, commit }, event) {
-    const volume = (event && event.target && event.target.value) !== undefined ? event.target.value : event
-    commit('SET_VOLUME', volume)
-    if (state.audioPlayer && typeof state.audioPlayer.setVolume === 'function') {
-      state.audioPlayer.setVolume(volume / 100)
-    } else if (state.audioPlayer && state.audioPlayer.sound && typeof state.audioPlayer.sound.volume === 'function') {
-      state.audioPlayer.sound.volume(volume / 100)
-    }
-  },
-
-  playAndPause({ state, commit }) {
-    try {
-      if (!state.audioPlayer) return
-      if (typeof state.audioPlayer.playAndPause === 'function') {
-        state.audioPlayer.playAndPause()
-      } else if (state.audioPlayer.sound && typeof state.audioPlayer.sound.play === 'function') {
-        if (state.audioPlayer.sound.playing && state.audioPlayer.sound.playing()) {
-          state.audioPlayer.sound.pause()
-        } else {
-          state.audioPlayer.sound.play()
-        }
-      } else if (typeof state.audioPlayer.toggle === 'function') {
-        state.audioPlayer.toggle()
-      }
-
-      const playing = (state.audioPlayer.sound && state.audioPlayer.sound.playing && state.audioPlayer.sound.playing()) || !!state.isPlaying
-      commit('SET_PLAYING', playing)
-      setTimeUpdater(state, commit)
-    } catch (err) {
-      console.error('playAndPause error', err)
-    }
-  },
-
-  moveToTime({ state, commit }, event) {
-    try {
-      const value = event && event.target ? event.target.value : event
-      const timePercent = value / 100
-      const duration = (state.audioPlayer && state.audioPlayer.duration) || (state.currentSong && state.currentSong.duration) || null
-      if (state.audioPlayer && typeof state.audioPlayer.moveToPosition === 'function') {
-        state.audioPlayer.moveToPosition(null, timePercent)
-      } else if (state.audioPlayer && typeof state.audioPlayer.seekToPosition === 'function') {
-        const pos = duration ? timePercent * duration : null
-        state.audioPlayer.seekToPosition(pos)
-      } else if (state.audioPlayer && state.audioPlayer.sound && typeof state.audioPlayer.sound.seek === 'function') {
-        const pos = duration ? timePercent * duration : null
-        state.audioPlayer.sound.seek(pos)
-      }
-      commit('SET_PLAYING', true)
-    } catch (err) {
-      console.error('moveToTime error', err)
-    }
-  },
-
-  prevSong({ state, commit }) {
-    try {
-      if (state.playlistManager && typeof state.playlistManager.prev === 'function') {
-        state.playlistManager.prev()
-        const song = state.playlistManager.getCurrentSong ? state.playlistManager.getCurrentSong() : null
-        if (song && song.id) {
-          // start
-          if (state.audioPlayer && typeof state.audioPlayer.start === 'function') {
-            state.audioPlayer.start(song.id, state.volume)
-          }
-          commit('SET_PLAYING', true)
-          if (song) commit('SET_CURRENT_SONG', song)
-          setTimeUpdater(state, commit)
-        }
-      }
-    } catch (err) {
-      console.error('prevSong error', err)
-    }
-  },
-
-  nextSong({ state, commit }) {
-    try {
-      if (state.playlistManager && typeof state.playlistManager.next === 'function') {
-        state.playlistManager.next()
-        const song = state.playlistManager.getCurrentSong ? state.playlistManager.getCurrentSong() : null
-        if (song && song.id) {
-          if (state.audioPlayer && typeof state.audioPlayer.start === 'function') {
-            state.audioPlayer.start(song.id, state.volume)
-          }
-          commit('SET_PLAYING', true)
-          if (song) commit('SET_CURRENT_SONG', song)
-          setTimeUpdater(state, commit)
-        }
-      }
-    } catch (err) {
-      console.error('nextSong error', err)
-    }
-  },
-
-  shuffleList({ state, commit }) {
-    try {
-      if (state.playlistManager && typeof state.playlistManager.shuffle === 'function') {
-        state.playlistManager.shuffle()
-        if (Array.isArray(state.playlistManager.songs)) {
-          commit('SET_SONGS', state.playlistManager.songs)
-        }
-      }
-    } catch (err) {
-      console.error('shuffleList error', err)
-    }
-  },
-
-  setAndUnsetRepeat({ state, commit }) {
-    commit('SET_REPEAT', !state.repeat)
-  },
-
-  async fetchSongs({ state, commit, dispatch }) {
-    if (!state.playlistManager) {
-      await dispatch('initializeServices')
-    }
-    try {
-      let songs = []
-      if (state.playlistManager && typeof state.playlistManager.loadSongs === 'function') {
-        songs = await state.playlistManager.loadSongs()
-      } else if (state.playlistManager && typeof state.playlistManager.load === 'function') {
-        songs = await state.playlistManager.load()
+    audioService.onPlaybackEnd = () => {
+  console.log('⏹️ [onPlaybackEnd] CANCIÓN TERMINADA', {
+    currentTrackId: state.currentSong?.id,
+    repeatMode: state.repeatMode,
+    isPlaying: state.isPlaying
+  });
+  
+  commit('SET_PLAYING_STATE', false);
+  
+  if (state.repeatMode === REPEAT_MODES.ONE) {
+    console.log('🔁 [onPlaybackEnd] MODO REPEAT ONE - Reiniciando misma canción');
+    
+    // 🔥 REINICIAR DIRECTAMENTE SIN PASAR POR selectTrack
+    setTimeout(() => {
+      if (state.audioService && state.audioService.howl && state.currentSong.id) {
+        console.log('🔄 [onPlaybackEnd] Reiniciando canción en modo repeat one');
+        
+        // Reiniciar posición y reproducir
+        state.audioService.howl.seek(0);
+        state.audioService.howl.play();
+        commit('SET_PLAYING_STATE', true);
+        
+        console.log('✅ [onPlaybackEnd] Canción reiniciada en modo repeat one');
       } else {
-        songs = state.songs || []
+        console.warn('⚠️ [onPlaybackEnd] No se pudo reiniciar - audioService no disponible');
       }
-      commit('SET_SONGS', songs)
-      return songs
-    } catch (err) {
-      console.error('fetchSongs error', err)
-      return []
-    }
-  },
-
-  async refreshSongs({ state, commit }) {
-    try {
-      let songs = []
-      if (state.playlistManager && typeof state.playlistManager.refresh === 'function') {
-        songs = await state.playlistManager.refresh()
-      } else if (state.playlistManager && typeof state.playlistManager.reload === 'function') {
-        songs = await state.playlistManager.reload()
-      }
-      commit('SET_SONGS', songs)
-      return songs
-    } catch (err) {
-      console.error('refreshSongs error', err)
-      return []
-    }
-  },
-
-  async filter({ state, commit }, { album = null, artist = null, name = null }) {
-    commit('SET_FILTERS', { album, artist })
-    try {
-      let filtered = state.songs
-      if (state.playlistManager && typeof state.playlistManager.filter === 'function') {
-        filtered = await state.playlistManager.filter({ artist, album, name })
+    }, 100);
+    
+  } else if (state.repeatMode === REPEAT_MODES.ALL) {
+    console.log('🔁 [onPlaybackEnd] MODO REPEAT ALL - Siguiente canción');
+    setTimeout(() => {
+      dispatch('playNextTrack');
+    }, 500);
+  } else if (state.repeatMode === REPEAT_MODES.OFF) {
+    console.log('⏹️ [onPlaybackEnd] MODO REPEAT OFF - Verificando siguiente canción');
+    if (state.playlistManager) {
+      const nextIndex = state.playlistManager.currentIndex + 1;
+      if (nextIndex < state.playlistManager.tracks.length) {
+        setTimeout(() => {
+          dispatch('playNextTrack');
+        }, 500);
       } else {
-        filtered = (state.songs || []).filter(s => {
-          let ok = true
-          if (artist) ok = ok && (s.artist_names ? s.artist_names.includes(artist) : (s.artist === artist))
-          if (album) ok = ok && (s.album_name ? s.album_name === album : (s.album === album))
-          if (name) ok = ok && (s.title ? s.title.toLowerCase().includes(name.toLowerCase()) : (s.title && s.title.toLowerCase().includes(name.toLowerCase())))
-          return ok
-        })
+        console.log('🏁 [onPlaybackEnd] Última canción - reproducción terminada');
       }
-      commit('SET_SONGS', filtered)
-      return filtered
-    } catch (err) {
-      console.error('filter error', err)
-      return []
     }
   }
 }
 
-function setTimeUpdater(state, commit) {
-  const interval = setInterval(() => {
-    try {
-      if (state.audioPlayer && state.audioPlayer.sound && typeof state.audioPlayer.sound.playing === 'function' && state.audioPlayer.sound.playing()) {
-        const currentTime = typeof state.audioPlayer.sound.seek === 'function' ? state.audioPlayer.sound.seek() : (state.audioPlayer.currentTime || 0)
-        updateTime(currentTime)
-      } else {
-        clearInterval(interval)
-      }
-    } catch (err) {
-      clearInterval(interval)
-      console.error('setTimeUpdater error', err)
+    audioService.onLoadProgress = (loaded, total, progress) => {
+      commit('SET_CHUNKS_PROGRESS', { loaded, total, progress })
     }
-  }, 1000)
 
-  function updateTime(currentTime) {
-    const duration = state.audioPlayer && state.audioPlayer.duration ? state.audioPlayer.duration : (state.currentSong && state.currentSong.duration ? state.currentSong.duration : 0)
-    const remainingTime = Math.max(duration - (currentTime || 0), 0)
+    audioService.onLoadComplete = () => {
+      commit('SET_LOADING_TRACK', false)
+    }
 
-    const formattedRemainingTime = formatTime(remainingTime)
-    const formattedTotalDuration = formatTime(duration)
-    const progressBarProgress = duration ? Math.floor(((currentTime || 0) / duration) * 100) : 0
+    commit('SET_AUDIO_SERVICE', audioService)
+    return audioService
+  },
 
-    commit('SET_TIMES', { remaining: formattedRemainingTime, total: formattedTotalDuration, progress: progressBarProgress })
+  initializePlaylistManager({ commit, state, rootState }) {
+    if (state.playlistManager) {
+      return state.playlistManager
+    }
+
+    const playlistManager = new PlaylistManager()
+    
+    if (rootState.tracks && rootState.tracks.tracks) {
+      playlistManager.setSongs(rootState.tracks.tracks)
+      commit('SET_ORIGINAL_TRACK_ORDER', rootState.tracks.tracks)
+    }
+
+    commit('SET_PLAYLIST_MANAGER', playlistManager)
+    return playlistManager
+  },
+
+  async selectTrack({ commit, state, dispatch }, track) {
+  console.log('🎵 [selectTrack] === SELECCIONANDO CANCIÓN ===', {
+    trackId: track?.id,
+    trackTitle: track?.title,
+    currentTrackId: state.currentSong?.id,
+    isCurrentlyPlaying: state.isPlaying,
+    isLoading: state.loadingTrack,
+    repeatMode: state.repeatMode
+  });
+
+  if (!track || !track.id) {
+    console.error('❌ [selectTrack] CANCIÓN NO VÁLIDA proporcionada:', track);
+    return;
   }
 
-  function formatTime(seconds) {
-    seconds = Math.floor(seconds || 0)
-    const totalMinutes = Math.floor(seconds / 60)
-    const totalSeconds = Math.floor(seconds % 60)
-    const formattedMinutes = String(totalMinutes).padStart(2, '0')
-    const formattedSeconds = String(totalSeconds).padStart(2, '0')
-    return `${formattedMinutes}:${formattedSeconds}`
+  // 🔥 CONTROL MEJORADO: Misma canción ya cargada (INCLUYE CASOS DE REPEAT)
+  if (state.currentSong.id === track.id && state.audioService && 
+      state.audioService.currentTrackId === track.id && 
+      state.audioService.howl && !state.loadingTrack) {
+    
+    console.log('🔁 [selectTrack] MISMA CANCIÓN ya cargada - Reiniciando sin recargar', {
+      isPlaying: state.isPlaying,
+      repeatMode: state.repeatMode
+    });
+    
+    // 🔥 ACTUALIZAR UI INMEDIATAMENTE - NO MOSTRAR CARGA
+    commit('SET_CURRENT_SONG', track);
+    
+    // 🔥 REINICIAR REPRODUCCIÓN SIN ACTIVAR ESTADO DE CARGA
+    if (state.audioService.howl) {
+      console.log('⏪ [selectTrack] Reiniciando canción actual desde el inicio');
+      
+      // Pequeña pausa antes de reiniciar para evitar conflicto
+      setTimeout(() => {
+        if (state.audioService && state.audioService.howl) {
+          state.audioService.howl.seek(0);
+          if (!state.isPlaying) {
+            state.audioService.howl.play();
+            commit('SET_PLAYING_STATE', true);
+          }
+          console.log('✅ [selectTrack] Canción reiniciada exitosamente');
+        }
+      }, 100);
+    }
+    
+    return;
+  }
+
+  try {
+    console.log('🚀 [selectTrack] INICIANDO PROCESO DE CARGA...', {
+      isDifferentTrack: state.currentSong.id !== track.id
+    });
+    
+    // 🔥 SOLO ACTIVAR CARGA SI ES UNA CANCIÓN DIFERENTE
+    if (state.currentSong.id !== track.id) {
+      commit('SET_LOADING_TRACK', true);
+      commit('SET_CHUNKS_PROGRESS', { loaded: 0, total: 0, progress: 0 });
+    }
+    
+    commit('SET_CURRENT_SONG', track);
+    commit('SET_PLAYING_STATE', false);
+
+    if (!state.audioService) {
+      console.log('🔧 [selectTrack] Inicializando servicio de audio...');
+      await dispatch('initializeAudioService');
+    }
+
+    if (!state.playlistManager) {
+      console.log('📋 [selectTrack] Inicializando gestor de playlist...');
+      await dispatch('initializePlaylistManager');
+    }
+
+    console.log('🎯 [selectTrack] Estableciendo canción actual en playlist manager...');
+    state.playlistManager.setCurrentSong(track.id);
+
+    console.log('▶️ [selectTrack] Iniciando reproducción a través del servicio de audio...');
+    const success = await state.audioService.start(track.id, state.volume);
+
+    if (success) {
+      console.log('✅ [selectTrack] Servicio de audio iniciado exitosamente');
+      commit('SET_PLAYING_STATE', true);
+      
+      // 🔥 DESACTIVAR CARGA INMEDIATAMENTE SI SE USÓ CACHÉ
+      if (state.currentSong.id === track.id && state.audioService.howl) {
+        console.log('💨 [selectTrack] Desactivando estado de carga - usando caché');
+        commit('SET_LOADING_TRACK', false);
+      }
+    } else {
+      console.warn('⚠️ [selectTrack] Servicio de audio no pudo iniciarse');
+      commit('SET_PLAYING_STATE', false);
+      commit('SET_LOADING_TRACK', false);
+    }
+
+  } catch (error) {
+    console.error('❌ [selectTrack] ERROR durante selección de canción:', error);
+    commit('SET_PLAYING_STATE', false);
+    commit('SET_LOADING_TRACK', false);
+  } finally {
+    console.log('🏁 [selectTrack] Proceso de selección completado', {
+      currentTrackId: state.currentSong.id,
+      isLoading: state.loadingTrack
+    });
+  }
+},
+
+  togglePlayback({ state, commit }) {
+    if (!state.audioService || state.loadingTrack) {
+      return
+    }
+
+    try {
+      state.audioService.playAndPause()
+      commit('SET_PLAYING_STATE', state.audioService.isPlaying)
+    } catch (error) {
+      console.error('❌ Error toggling playback:', error)
+    }
+  },
+
+  async playNextTrack({ state, dispatch }) {
+    if (!state.playlistManager) {
+      return
+    }
+
+    try {
+      state.playlistManager.next()
+      const nextSong = state.playlistManager.getCurrentSong()
+      
+      if (nextSong) {
+        await dispatch('selectTrack', nextSong)
+      }
+    } catch (error) {
+      console.error('❌ Error playing next track:', error)
+    }
+  },
+
+  async playPreviousTrack({ state, dispatch }) {
+    if (!state.playlistManager) {
+      return
+    }
+
+    try {
+      if (state.currentTime > 3) {
+        state.audioService.seekToPosition(0)
+        return
+      }
+
+      state.playlistManager.prev()
+      const prevSong = state.playlistManager.getCurrentSong()
+      
+      if (prevSong) {
+        await dispatch('selectTrack', prevSong)
+      }
+    } catch (error) {
+      console.error('❌ Error playing previous track:', error)
+    }
+  },
+
+  seekToPosition({ state, commit }, positionPercent) {
+    if (!state.audioService || !state.duration || state.loadingTrack) {
+      return
+    }
+
+    const targetTime = (positionPercent / 100) * state.duration
+    commit('SET_PLAYBACK_PROGRESS', {
+      currentTime: targetTime,
+      duration: state.duration,
+      progress: positionPercent
+    })
+
+    state.audioService.seekToPosition(positionPercent)
+  },
+
+  setVolume({ state, commit }, event) {
+    const volume = typeof event === 'number' ? event : parseInt(event.target.value)
+    const normalizedVolume = Math.max(0, Math.min(100, volume))
+    
+    commit('SET_VOLUME', normalizedVolume)
+    
+    // Si el volumen es > 0, desmutear automáticamente
+    if (normalizedVolume > 0 && state.isMuted) {
+      commit('SET_MUTED', false)
+    }
+    
+    // Si el volumen es 0, mutear
+    if (normalizedVolume === 0 && !state.isMuted) {
+      commit('SET_MUTED', true)
+    }
+
+    if (state.audioService) {
+      state.audioService.setVolume(normalizedVolume)
+    }
+  },
+
+  toggleMute({ state, commit }) {
+    if (state.isMuted) {
+      // Desmutear: restaurar volumen anterior
+      const volumeToRestore = state.previousVolume > 0 ? state.previousVolume : 50
+      commit('SET_VOLUME', volumeToRestore)
+      commit('SET_MUTED', false)
+      
+      if (state.audioService) {
+        state.audioService.setVolume(volumeToRestore)
+      }
+    } else {
+      // Mutear: guardar volumen actual y poner a 0
+      commit('SET_PREVIOUS_VOLUME', state.volume)
+      commit('SET_VOLUME', 0)
+      commit('SET_MUTED', true)
+      
+      if (state.audioService) {
+        state.audioService.setVolume(0)
+      }
+    }
+  },
+
+  async toggleShuffle({ commit, state, dispatch, rootState }) {
+    const newShuffleState = !state.isShuffleActive
+    commit('SET_SHUFFLE_ACTIVE', newShuffleState)
+
+    if (!state.playlistManager) {
+      await dispatch('initializePlaylistManager')
+    }
+
+    if (newShuffleState) {
+      // Guardar orden original
+      commit('SET_ORIGINAL_TRACK_ORDER', [...state.playlistManager.tracks])
+      
+      // Mezclar manteniendo la canción actual al inicio
+      const currentSongId = state.currentSong?.id
+      const tracks = [...state.playlistManager.tracks]
+      
+      // Separar la canción actual del resto
+      const currentTrackIndex = tracks.findIndex(t => t.id === currentSongId)
+      let currentTrack = null
+      let otherTracks = tracks
+      
+      if (currentTrackIndex >= 0) {
+        currentTrack = tracks[currentTrackIndex]
+        otherTracks = tracks.filter((_, i) => i !== currentTrackIndex)
+      }
+      
+      // Mezclar el resto
+      for (let i = otherTracks.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const tmp = otherTracks[i]
+        otherTracks[i] = otherTracks[j]
+        otherTracks[j] = tmp
+      }
+      
+      // Reconstruir con canción actual al inicio
+      const shuffledTracks = currentTrack ? [currentTrack, ...otherTracks] : otherTracks
+      
+      state.playlistManager.setSongs(shuffledTracks)
+      state.playlistManager.currentIndex = 0
+      
+      // Actualizar store de tracks
+      if (rootState.tracks) {
+        rootState.tracks.tracks = [...shuffledTracks]
+      }
+      
+      console.log('🔀 Playlist shuffled (current track first)')
+    } else {
+      // Restaurar orden original
+      if (state.originalTrackOrder.length > 0) {
+        state.playlistManager.setSongs(state.originalTrackOrder)
+        
+        if (rootState.tracks) {
+          rootState.tracks.tracks = [...state.originalTrackOrder]
+        }
+        
+        if (state.currentSong?.id) {
+          state.playlistManager.setCurrentSong(state.currentSong.id)
+        }
+        
+        console.log('📋 Original order restored')
+      }
+    }
+  },
+
+  toggleRepeat({ commit, state }) {
+    let newMode
+    switch (state.repeatMode) {
+      case REPEAT_MODES.OFF:
+        newMode = REPEAT_MODES.ALL
+        break
+      case REPEAT_MODES.ALL:
+        newMode = REPEAT_MODES.ONE
+        break
+      case REPEAT_MODES.ONE:
+        newMode = REPEAT_MODES.OFF
+        break
+      default:
+        newMode = REPEAT_MODES.OFF
+    }
+    
+    commit('SET_REPEAT_MODE', newMode)
+    console.log(`🔁 Repeat mode: ${newMode}`)
+  },
+
+  updatePlaylistFromTracks({ state, commit, rootState }) {
+    if (state.playlistManager && rootState.tracks && rootState.tracks.tracks) {
+      state.playlistManager.setSongs(rootState.tracks.tracks)
+      
+      // Solo actualizar el orden original si no estamos en shuffle
+      if (!state.isShuffleActive) {
+        commit('SET_ORIGINAL_TRACK_ORDER', rootState.tracks.tracks)
+      }
+    }
+  },
+
+  destroyPlayer({ state, commit }) {
+    if (state.audioService) {
+      state.audioService.destroy()
+    }
+
+    commit('SET_AUDIO_SERVICE', null)
+    commit('SET_PLAYLIST_MANAGER', null)
+    commit('SET_CURRENT_SONG', {})
+    commit('SET_PLAYING_STATE', false)
+    commit('SET_PLAYBACK_TIME', { currentTime: 0, duration: 0 })
+    commit('SET_PLAYBACK_PROGRESS', { currentTime: 0, duration: 0, progress: 0 })
+    commit('SET_CHUNKS_PROGRESS', { loaded: 0, total: 0, progress: 0 })
+    commit('SET_REPEAT_MODE', REPEAT_MODES.OFF)
+    commit('SET_SHUFFLE_ACTIVE', false)
+  }
+}
+
+const getters = {
+  isAudioServiceReady: state => !!state.audioService && !state.loadingTrack,
+  currentSongTitle: state => state.currentSong.title || 'Sin título',
+  currentSongArtist: state => {
+    if (Array.isArray(state.currentSong.artist_names)) {
+      return state.currentSong.artist_names.join(', ')
+    }
+    return state.currentSong.artist || 'Artista desconocido'
+  },
+  currentSongAlbum: state => state.currentSong.album_name || state.currentSong.album || 'Álbum desconocido',
+  loadingProgress: state => state.loadProgress,
+  repeatModeIcon: () => 'fa-redo',
+  isRepeatActive: state => state.repeatMode !== REPEAT_MODES.OFF,
+  repeatModeLabel: state => {
+    switch (state.repeatMode) {
+      case REPEAT_MODES.ONE:
+        return 'Repetir: Una canción'
+      case REPEAT_MODES.ALL:
+        return 'Repetir: Todas'
+      default:
+        return 'Repetir: Desactivado'
+    }
+  },
+  volumeIcon: state => {
+  if (state.isMuted || state.volume === 0) {
+    return 'fas fa-volume-mute'
+  } else if (state.volume > 0 && state.volume <= 30) {
+    return 'fas fa-volume-off'  // Una onda de sonido
+  } else if (state.volume > 30 && state.volume <= 70) {
+    return 'fas fa-volume-low'       // Dos ondas de sonido  
+  } else {
+    return 'fas fa-volume-high'    // Tres ondas de sonido (bocinita completa)
+  }
+},
+  volumeColor: state => {
+    if (state.isMuted || state.volume === 0) {
+      return '#6c757d'
+    }
+    // Interpolación de blanco a azul según el volumen
+    const ratio = state.volume / 100
+    const r = Math.round(255 - (255 - 13) * ratio)
+    const g = Math.round(255 - (255 - 110) * ratio)
+    const b = Math.round(255 - (255 - 253) * ratio)
+    return `rgb(${r}, ${g}, ${b})`
   }
 }
 
@@ -391,5 +577,6 @@ export default {
   namespaced: true,
   state,
   mutations,
-  actions
+  actions,
+  getters
 }

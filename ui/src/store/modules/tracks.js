@@ -1,12 +1,12 @@
-import PlaylistManager from '@/services/PlaylistManager' 
+import { API_BASE_URL } from '@/utils/constants'
 
 const state = {
-  tracks: [], 
+  tracks: [],
+  allTracks: [],
   searchQuery: '',
-  filters: {
-    genre: '',
-    decade: '',
-    rating: 0
+  activeFilters: {
+    artists: [],
+    album: null
   },
   isFiltersVisible: false
 }
@@ -15,45 +15,47 @@ const mutations = {
   SET_SEARCH_QUERY(state, query) {
     state.searchQuery = query
   },
-  SET_FILTERS(state, filters) {
-    state.filters = { ...state.filters, ...filters }
+  SET_ACTIVE_FILTERS(state, filters) {
+    state.activeFilters = { ...state.activeFilters, ...filters }
   },
   TOGGLE_FILTERS_VISIBILITY(state) {
     state.isFiltersVisible = !state.isFiltersVisible
   },
   SET_TRACKS(state, tracks) {
     state.tracks = tracks
+  },
+  SET_ALL_TRACKS(state, tracks) {
+    state.allTracks = tracks
+  },
+  CLEAR_FILTERS(state) {
+    state.activeFilters = { artists: [], album: null }
+    state.searchQuery = ''
   }
 }
 
 const actions = {
-  updateSearchQuery({ commit }, event) {
-    commit('SET_SEARCH_QUERY', event && event.target ? event.target.value : event || '')
+  updateSearchQuery({ commit, dispatch }, query) {
+    const searchText = typeof query === 'string' ? query :
+      (query && query.target ? query.target.value : '')
+    commit('SET_SEARCH_QUERY', searchText)
+    dispatch('applyFilters')
   },
-  updateFilters({ commit }, filters) {
-    commit('SET_FILTERS', filters)
-  },
+
   toggleFilters({ commit }) {
     commit('TOGGLE_FILTERS_VISIBILITY')
   },
 
-  async fetchSongs({ commit, state }) {
+  async fetchSongs({ commit, dispatch }) {
     try {
-      let pm = null
-      try {
-        pm = new PlaylistManager()
-      } catch (err) {
-        pm = null
-      }
-      let songs = []
-      if (pm && typeof pm.loadSongs === 'function') {
-        songs = await pm.loadSongs()
-      } else if (pm && typeof pm.load === 'function') {
-        songs = await pm.load()
-      } else {
-        songs = state.tracks 
-      }
+      const response = await fetch(`${API_BASE_URL}/tracks/`)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const songs = await response.json()
+
+      commit('SET_ALL_TRACKS', songs)
       commit('SET_TRACKS', songs)
+
+      dispatch('player/updatePlaylistFromTracks', null, { root: true })
+
       return songs
     } catch (err) {
       console.error('fetchSongs error', err)
@@ -61,64 +63,66 @@ const actions = {
     }
   },
 
-  async refreshSongs({ commit }) {
+  async refreshSongs({ dispatch }) {
+    return await dispatch('fetchSongs')
+  },
+
+  async setFilters({ commit, dispatch }, { artists = [], album = null }) {
+    commit('SET_ACTIVE_FILTERS', { artists, album })
+    await dispatch('applyFilters')
+  },
+
+  async applyFilters({ state, commit, dispatch }) {
     try {
-      const pm = new PlaylistManager()
-      let songs = []
-      if (typeof pm.refresh === 'function') {
-        songs = await pm.refresh()
-      } else if (typeof pm.reload === 'function') {
-        songs = await pm.reload()
+      // Construir query params para backend
+      const params = new URLSearchParams()
+
+      // Filtros de modal (backend)
+      if (state.activeFilters.artists && state.activeFilters.artists.length > 0) {
+        state.activeFilters.artists.forEach(artistId => {
+          params.append('artist[]', artistId)
+        })
       }
-      commit('SET_TRACKS', songs)
-      return songs
-    } catch (err) {
-      console.error('refreshSongs error', err)
-      return []
+
+      if (state.activeFilters.album) {
+        params.append('album', state.activeFilters.album)
+      }
+
+      // Filtro de búsqueda (backend también)
+      if (state.searchQuery && state.searchQuery.trim()) {
+        params.append('title', state.searchQuery.trim())
+      }
+
+      // Hacer request al backend con filtros
+      const url = `${API_BASE_URL}/tracks/${params.toString() ? '?' + params.toString() : ''}`
+      console.log('🔍 Fetching filtered tracks:', url)
+
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const filtered = await response.json()
+
+      commit('SET_TRACKS', filtered)
+      dispatch('player/updatePlaylistFromTracks', null, { root: true })
+
+    } catch (error) {
+      console.error('Error applying filters:', error)
+      // Fallback a todos los tracks si hay error
+      commit('SET_TRACKS', state.allTracks)
     }
   },
 
-  async filter({ commit, state }, { artist = null, album = null, name = null }) {
-    commit('SET_FILTERS', { artist, album })
-    try {
-      const pm = new PlaylistManager()
-      if (typeof pm.filter === 'function') {
-        const filtered = await pm.filter({ artist, album, name })
-        commit('SET_TRACKS', filtered)
-        return filtered
-      } else {
-        // fallback local filter
-        const filtered = (state.tracks || []).filter(s => {
-          let ok = true
-          if (artist) ok = ok && (s.artist_names ? s.artist_names.includes(artist) : s.artist === artist)
-          if (album) ok = ok && (s.album_name ? s.album_name === album : s.album === album)
-          if (name) ok = ok && (s.title ? s.title.toLowerCase().includes(name.toLowerCase()) : false)
-          return ok
-        })
-        commit('SET_TRACKS', filtered)
-        return filtered
-      }
-    } catch (err) {
-      console.error('tracks.filter error', err)
-      return []
-    }
+  clearAllFilters({ commit, dispatch }) {
+    commit('CLEAR_FILTERS')
+    dispatch('applyFilters')
   }
 }
 
 const getters = {
-  filteredTracks: (state) => {
-    let filtered = state.tracks || []
-
-    if (state.searchQuery) {
-      const query = state.searchQuery.toLowerCase()
-      filtered = filtered.filter(track =>
-        (track.title && track.title.toLowerCase().includes(query)) ||
-        (track.artist && track.artist.toLowerCase().includes(query)) ||
-        (track.album && track.album.toLowerCase().includes(query))
-      )
-    }
-
-    return filtered
+  filteredTracks: state => state.tracks,
+  hasActiveFilters: state => {
+    return (state.activeFilters.artists && state.activeFilters.artists.length > 0) ||
+      state.activeFilters.album !== null ||
+      (state.searchQuery && state.searchQuery.trim().length > 0)
   }
 }
 

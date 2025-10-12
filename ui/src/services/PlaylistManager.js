@@ -12,8 +12,8 @@ function buildUrl(base, params = {}) {
 export default class PlaylistManager {
   constructor(apiBase = API_BASE_URL || 'http://localhost:8000/api') {
     const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : 'http://localhost:8000/api'
-    this.apiUrl = `${base}/songs/`
-    this.songs = []
+    this.apiUrl = `${base}/tracks/`
+    this.tracks = []
     this.currentIndex = 0
     this.filters = { artist: null, album: null, name: null }
     this._loading = false
@@ -34,14 +34,14 @@ export default class PlaylistManager {
     const url = buildUrl(this.apiUrl, merged)
     const p = this._fetchJson(url)
       .then(data => {
-        this.songs = Array.isArray(data) ? data : (data.results || [])
-        if (!this.songs) this.songs = []
-        if (this.currentIndex >= this.songs.length) this.currentIndex = 0
-        return this.songs
+        this.tracks = Array.isArray(data) ? data : (data.results || [])
+        if (!this.tracks) this.tracks = []
+        if (this.currentIndex >= this.tracks.length) this.currentIndex = 0
+        return this.tracks
       })
       .catch(err => {
         console.error('PlaylistManager loadSongs error', err)
-        return this.songs
+        return this.tracks
       })
       .finally(() => {
         this._loading = false
@@ -62,34 +62,53 @@ export default class PlaylistManager {
   }
 
   setCurrentSong(songId) {
-    const idx = this.songs.findIndex(s => s && (s.id === songId || String(s.id) === String(songId)))
-    this.currentIndex = idx >= 0 ? idx : Math.max(0, Math.min(this.currentIndex, this.songs.length - 1))
+    const idx = this.tracks.findIndex(s => s && (s.id === songId || String(s.id) === String(songId)))
+    this.currentIndex = idx >= 0 ? idx : Math.max(0, Math.min(this.currentIndex, this.tracks.length - 1))
   }
 
   getCurrentSong() {
-    if (!this.songs || this.songs.length === 0) return null
+    if (!this.tracks || this.tracks.length === 0) return null
     if (this.currentIndex < 0) this.currentIndex = 0
-    if (this.currentIndex >= this.songs.length) this.currentIndex = this.songs.length - 1
-    return this.songs[this.currentIndex] || null
+    if (this.currentIndex >= this.tracks.length) this.currentIndex = this.tracks.length - 1
+    return this.tracks[this.currentIndex] || null
   }
 
   next() {
-    if (!this.songs || this.songs.length === 0) return
-    this.currentIndex = (this.currentIndex + 1) % this.songs.length
+    if (!this.tracks || this.tracks.length === 0) return
+    this.currentIndex = (this.currentIndex + 1) % this.tracks.length
   }
 
   prev() {
-    if (!this.songs || this.songs.length === 0) return
-    this.currentIndex = (this.currentIndex - 1 + this.songs.length) % this.songs.length
+    if (!this.tracks || this.tracks.length === 0) return
+    this.currentIndex = (this.currentIndex - 1 + this.tracks.length) % this.tracks.length
   }
 
-  shuffle() {
-    for (let i = this.songs.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      const tmp = this.songs[i]
-      this.songs[i] = this.songs[j]
-      this.songs[j] = tmp
+  shuffleKeepingCurrent(currentSongId = null) {
+    if (!this.tracks || this.tracks.length <= 1) return
+    
+    const tracks = [...this.tracks]
+    let currentTrack = null
+    let otherTracks = tracks
+    
+    // Si hay una canción actual, separarla
+    if (currentSongId) {
+      const currentIndex = tracks.findIndex(t => t.id === currentSongId)
+      if (currentIndex >= 0) {
+        currentTrack = tracks[currentIndex]
+        otherTracks = tracks.filter((_, i) => i !== currentIndex)
+      }
     }
+    
+    // Mezclar el resto usando Fisher-Yates
+    for (let i = otherTracks.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const tmp = otherTracks[i]
+      otherTracks[i] = otherTracks[j]
+      otherTracks[j] = tmp
+    }
+    
+    // Reconstruir con canción actual al inicio
+    this.tracks = currentTrack ? [currentTrack, ...otherTracks] : otherTracks
     this.currentIndex = 0
   }
 
@@ -102,7 +121,7 @@ export default class PlaylistManager {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const created = await res.json()
-      this.songs.push(created)
+      this.tracks.push(created)
       return created
     } catch (err) {
       console.error('PlaylistManager addSong error', err)
@@ -111,12 +130,12 @@ export default class PlaylistManager {
   }
 
   getSongs() {
-    return this.songs
+    return this.tracks
   }
 
   setSongs(list = []) {
-    this.songs = Array.isArray(list) ? list : []
-    if (this.currentIndex >= this.songs.length) this.currentIndex = 0
+    this.tracks = Array.isArray(list) ? list : []
+    if (this.currentIndex >= this.tracks.length) this.currentIndex = 0
   }
 
   clearFilters() {
