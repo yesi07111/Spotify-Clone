@@ -4,72 +4,60 @@
     class="modal fade show"
     style="display: block"
     role="dialog"
-    aria-modal="true"
-    aria-labelledby="filterModalTitle"
     @click.self="closeModal"
   >
-    <div class="modal-dialog" ref="modalContainer" tabindex="-1" @keydown.esc="closeModal">
+    <div class="modal-dialog">
       <div class="modal-content bg-dark text-white">
         <div class="modal-header">
-          <h5 class="modal-title" id="filterModalTitle">Filter by Artist and Album</h5>
-          <button
-            type="button"
-            class="btn-close btn-close-white"
-            @click="closeModal"
-            aria-label="Close"
-          ></button>
+          <h5 class="modal-title">Filtrar por Artista y Álbum</h5>
+          <button type="button" class="btn-close btn-close-white" @click="closeModal"></button>
         </div>
 
         <div class="modal-body">
           <form @submit.prevent="submitForm">
             <div class="mb-3">
-              <label for="artistSelect" class="form-label">Select Artists</label>
+              <label for="artistSelect" class="form-label">Seleccionar Artistas</label>
               <select
                 id="artistSelect"
                 v-model="selectedArtists"
                 class="form-control"
                 multiple
+                size="5"
                 :disabled="loadingArtists"
-                aria-describedby="artistHelp"
               >
-                <option
-                  v-for="artist in artists"
-                  :key="artist.id"
-                  :value="artist.id"
-                >
+                <option v-for="artist in artists" :key="artist.id" :value="artist.id">
                   {{ artist.name }}
                 </option>
               </select>
-              <div id="artistHelp" class="form-text" v-if="loadingArtists">Loading artists...</div>
+              <div class="form-text" v-if="loadingArtists">Cargando artistas...</div>
+              <div class="form-text">Mantén Ctrl/Cmd para seleccionar múltiples</div>
               <div class="text-danger small" v-if="errorArtists">{{ errorArtists }}</div>
             </div>
 
             <div class="mb-3">
-              <label for="albumSelect" class="form-label">Select Album</label>
+              <label for="albumSelect" class="form-label">Seleccionar Álbum</label>
               <select
                 id="albumSelect"
                 v-model="selectedAlbum"
                 class="form-control"
                 :disabled="loadingAlbums"
               >
-                <option :value="null">All albums</option>
-                <option
-                  v-for="album in albums"
-                  :key="album.id"
-                  :value="album.id"
-                >
+                <option :value="null">Todos los álbumes</option>
+                <option v-for="album in albums" :key="album.id" :value="album.id">
                   {{ album.name }}
                 </option>
               </select>
-              <div class="form-text" v-if="loadingAlbums">Loading albums...</div>
+              <div class="form-text" v-if="loadingAlbums">Cargando álbumes...</div>
               <div class="text-danger small" v-if="errorAlbums">{{ errorAlbums }}</div>
             </div>
 
             <div class="modal-footer">
-              <button type="submit" class="btn btn-primary" :disabled="isSubmitting">
-                Apply Filters
+              <button type="button" class="btn btn-secondary" @click="closeModal">
+                Cancelar
               </button>
-              <button type="button" class="btn btn-secondary" @click="closeModal">Cancel</button>
+              <button type="submit" class="btn btn-primary" :disabled="isSubmitting">
+                Aplicar Filtros
+              </button>
             </div>
           </form>
         </div>
@@ -100,20 +88,19 @@ export default {
     }
   },
   methods: {
-    ...mapActions('tracks', ['filter']),
+    ...mapActions('tracks', ['setFilters']),
+    
     async openModal() {
       this.visible = true
       this.selectedArtists = []
       this.selectedAlbum = null
-      // parallel load
       await Promise.all([this.loadArtists(), this.loadAlbums()])
-      this.$nextTick(() => {
-        if (this.$refs.modalContainer) this.$refs.modalContainer.focus()
-      })
     },
+    
     closeModal() {
       this.visible = false
     },
+    
     async loadArtists() {
       this.loadingArtists = true
       this.errorArtists = null
@@ -123,12 +110,13 @@ export default {
         const data = await res.json()
         this.artists = Array.isArray(data) ? data : []
       } catch (err) {
-        this.errorArtists = 'Error fetching artists'
-        console.error('TrackFilterModal: fetch artists error', err)
+        this.errorArtists = 'Error al cargar artistas'
+        console.error('Error loading artists:', err)
       } finally {
         this.loadingArtists = false
       }
     },
+    
     async loadAlbums() {
       this.loadingAlbums = true
       this.errorAlbums = null
@@ -138,25 +126,25 @@ export default {
         const data = await res.json()
         this.albums = Array.isArray(data) ? data : []
       } catch (err) {
-        this.errorAlbums = 'Error fetching albums'
-        console.error('TrackFilterModal: fetch albums error', err)
+        this.errorAlbums = 'Error al cargar álbumes'
+        console.error('Error loading albums:', err)
       } finally {
         this.loadingAlbums = false
       }
     },
+    
     async submitForm() {
       this.isSubmitting = true
       try {
-        await this.filter({
-          album: this.selectedAlbum,
-          artist: Array.from(this.selectedArtists),
-          name: null
+        await this.setFilters({
+          artists: this.selectedArtists,
+          album: this.selectedAlbum
         })
+        this.closeModal()
       } catch (err) {
-        console.error('TrackFilterModal: apply filter error', err)
+        console.error('Error applying filters:', err)
       } finally {
         this.isSubmitting = false
-        this.closeModal()
       }
     }
   }
@@ -166,6 +154,14 @@ export default {
 <style scoped>
 .modal-content {
   border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+select[multiple] {
+  min-height: 150px;
+}
+
+.form-control:focus {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
 }
 </style>
