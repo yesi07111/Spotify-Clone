@@ -23,3 +23,8 @@ pnpm-debug.log*
 *.sw?
 
 commits*
+*.sqlite3
+*.venv
+
+extra
+songs
