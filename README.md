@@ -11,13 +11,18 @@ El proyecto simula las funcionalidades principales de un reproductor de música 
 
 ## ✨ Funcionalidades Principales
 
-* 🎵 Reproducción de audio con controles básicos (play / pause)
+* 🎵 **Reproducción de audio** con controles completos:
+  * **Play / Pause** - Reproducir y pausar la canción actual
+  * **Next / Previous** - Avanzar o retroceder entre canciones
+  * **Seek** - Buscar posición específica dentro de la canción mediante la barra de progreso
 * 🔄 Modos de reproducción: *Shuffle*, *Repeat All* y *Repeat One*
 * 🔊 Control dinámico de volumen
 * 🔍 Búsqueda de canciones por nombre
 * 🖇️ Filtros avanzados por **artista(s)** y **álbum**
 * 🎯 Navegación entre canciones
-* 🖼️ Sistema “inteligente” de asignación de imágenes (aleatorio pero estético)
+* 🖼️ Sistema "inteligente" de asignación de imágenes (aleatorio pero estético)
+
+> **Nota técnica:** Las canciones se transmiten por **chunks** (fragmentos) para un futuro uso distribuido.
 
 ---
 
