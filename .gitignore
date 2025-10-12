@@ -21,3 +21,14 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+commits*
+*.sqlite3
+*.venv
+
+extra
+songs
+package-lock.json
+.env
+
+__pycache__
