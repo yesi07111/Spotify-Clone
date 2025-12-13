@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Callable, Any, Dict
 
 from .db_manager import DBManager
+from .storage_manager import StorageManager, CHUNK_RANGES, RPC_TIMEOUT, CHUNK_SIZE
 from .discovery import get_service_tasks, discover_active_clients
 
 LOGGINGS_ENABLED = False
