@@ -8,6 +8,8 @@ import Pyro5.api as rpc
 
 from dataclasses import dataclass
 from typing import List, Optional, Callable, Any, Dict
+
+from .db_manager import DBManager
 from .discovery import get_service_tasks, discover_active_clients
 
 LOGGINGS_ENABLED = False
@@ -433,7 +435,7 @@ class RaftConsensusFunctions:
             try:
                 # Copiar BD completa
                 db_dump = remote_db.get_full_dump(best_node)
-                self.raft_server.db_instance.restore_from_dump(db_dump) #TODO: Implementar db_instance
+                self.raft_server.db_instance.restore_from_dump(db_dump)
                 self._log(f"BD copiada desde nodo {best_node}")
                 
                 # Copiar JSON
@@ -698,8 +700,8 @@ class RaftServer:
             on_non_being_leader=on_non_being_leader,
         )
 
-        self.db_instance = DBManager() #TODO: Implementar DBManager
-        self.storage_instance = StorageManager() #TODO: Implementar StorageManager
+        self.db_instance = DBManager()
+        self.storage_instance = StorageManager()
 
         # Tabla de nodos activos
         self.node_states = {}  # {node_id: "DEAD" | "ALIVE" | "RE-SPAWN" | "NEW"}
