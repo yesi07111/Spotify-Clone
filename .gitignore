@@ -31,5 +31,5 @@ extra
 songs
 package-lock.json
 .env
-
+docker_commands*
 __pycache__
