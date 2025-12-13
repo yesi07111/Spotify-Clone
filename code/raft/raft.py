@@ -433,7 +433,7 @@ class RaftConsensusFunctions:
             try:
                 # Copiar BD completa
                 db_dump = remote_db.get_full_dump(best_node)
-                self.raft_server.db_instance.restore_from_dump(db_dump)
+                self.raft_server.db_instance.restore_from_dump(db_dump) #TODO: Implementar db_instance
                 self._log(f"BD copiada desde nodo {best_node}")
                 
                 # Copiar JSON
@@ -657,4 +657,387 @@ class RaftConsensusFunctions:
             ]
             
             self._log(f"Total de tareas pendientes: {len(self.pending_tasks)}")
-   
+    
+class RaftServer:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        """
+        Se ejecuta antes que __init__. Aquí garantizamos el singleton.
+        """
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:  # bloqueo de doble verificación
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(
+        self,
+        node_id: int,
+        host: str,
+        port: int,
+        on_become_leader: Optional[Callable] = None,
+        on_non_being_leader: Optional[Callable] = None,
+    ):
+        if getattr(self, "_initialized", False):
+            return
+
+        self._initialized = True
+
+        self.node_id = node_id
+        self.host = host
+        self.port = port
+
+        print(f"[Node {node_id}] Inicializando servidor Raft en {host}:{port}")
+
+        self.raft_instance = RaftConsensusFunctions(
+            node_id,
+            on_timer_end_callback=self.on_timer_end,
+            on_become_leader=on_become_leader,
+            on_non_being_leader=on_non_being_leader,
+        )
+
+        self.db_instance = DBManager() #TODO: Implementar DBManager
+        self.storage_instance = StorageManager() #TODO: Implementar StorageManager
+
+        # Tabla de nodos activos
+        self.node_states = {}  # {node_id: "DEAD" | "ALIVE" | "RE-SPAWN" | "NEW"}
+        self.node_states_lock = threading.Lock()
+        self.previous_active_nodes = set()
+
+        self.raft_instance._log(
+            f"Inicializando índices de replicación para {len(self._get_client_nodes())} nodos"
+        )
+        for client_id, _, _ in self._get_client_nodes():
+            self.raft_instance.next_index[client_id] = 1
+            self.raft_instance.match_index[client_id] = 0
+            self.node_states[client_id] = "NEW"
+
+        self.daemon = rpc.Daemon(host=host, port=port)
+        uri = self.daemon.register(self.raft_instance, objectId=f"raft.node.{node_id}")
+        uri_db = self.daemon.register(self.db_instance, objectId=f"raft.db.{node_id}")
+        uri_storage = self.daemon.register(self.storage_instance, objectId=f"raft.storage.{node_id}")
+
+        self.raft_instance._log(f"Objeto RAFT registrado con URI: {uri}")
+        self.raft_instance._log(f"Objeto STORAGE registrado con URI: {uri_storage}")
+        self.raft_instance._log(f"Objeto DB registrado con URI: {uri_db}")
+
+        # Iniciar hilo de monitoreo de nodos (heartbeat)
+
+        self.heartbeat_thread = threading.Thread(
+            target=self._send_heartbeats, daemon=True
+        )
+        self.heartbeat_thread.start()
+        self.raft_instance._log("Hilo de heartbeat iniciado")
+
+        self.client_proxys: Dict[str, rpc.Proxy] = {}
+
+        print(f"[Node {node_id}] Servidor iniciado en {host}:{port}")
+
+    def start(self):
+        # Asegurar que el daemon esté creado antes de usarlo
+        if not hasattr(self, "daemon") or self.daemon is None:
+            self._init_daemon()
+
+        self.raft_instance._log(f"Iniciando daemon de Pyro5 en {self.host}:{self.port}")
+        self.daemon.requestLoop()
+
+    def _init_daemon(self):
+        """
+        Inicializa el daemon de Pyro5 si no se creó antes.
+        """
+        import Pyro5.api
+
+        self.daemon = Pyro5.api.Daemon(host=self.host, port=self.port)
+
+    def _is_node_active(self, client_id: int) -> bool:
+        """Verifica si un nodo está activo según node_states"""
+        with self.node_states_lock:
+            return self.node_states.get(client_id) == "ALIVE"
+
+    def _get_client_server(
+        self, client_id: int, client_host: str, client_port: int, type: str = "node"
+    ) -> Optional[rpc.Proxy]:
+        """
+        Obtiene un proxy para comunicarse con un nodo.
+        Retorna None si el nodo no está activo.
+        """
+        if not self._is_node_active(client_id):
+            self.raft_instance._log(f"Nodo {client_id} no está activo, omitiendo proxy")
+            return None
+
+        try:
+            uri = f"PYRO:raft.{type}.{client_id}@{client_host}:{client_port}"
+            import logging
+            if type != "node":
+                logging.info(f"\n\n[Raft] Se creo el proxy RCP al {client_id} con URI: {uri}")
+            return rpc.Proxy(uri)
+        except Exception as e:
+            self.raft_instance._log(f"Error al crear proxy para nodo {client_id}: {e}")
+            # self._set_node_status(client_id, False)
+            return None
+
+    def on_timer_end(self):
+        self.raft_instance._log(
+            f"Iniciando elección para término {self.raft_instance.current_term}"
+        )
+
+        total_votes = 1
+        required_votes = 1
+        self.raft_instance._log(
+            f"Elección iniciada: votos requeridos={required_votes}, voto propio contado"
+        )
+
+        last_log_index = len(self.raft_instance.log)
+        last_log_term = self.raft_instance.log[-1].term if self.raft_instance.log else 0
+
+        for client_node_id, client_host, client_port in self._get_client_nodes():
+            try:
+                self.raft_instance._log(
+                    f"Solicitando voto del nodo {client_node_id} en {client_host}:{client_port}"
+                )
+
+                client_server = self._get_client_server(
+                    client_node_id, client_host, client_port
+                )
+
+                if client_server is None:
+                    self.raft_instance._log(
+                        f"Nodo {client_node_id} no está activo, omitiendo solicitud de voto"
+                    )
+                    continue
+
+                response = client_server.request_vote(
+                    self.raft_instance.current_term,
+                    self.raft_instance.node_id,
+                    last_log_index,
+                    last_log_term,
+                )
+
+                required_votes += 1
+
+                if response["term"] > self.raft_instance.current_term:
+                    self.raft_instance._log(
+                        f"Término superior descubierto {response['term']} desde nodo {client_node_id}, actualizando"
+                    )
+                    self.raft_instance.current_term = response["term"]
+                    return
+
+                if response["success"]:
+                    total_votes += 1
+                    self.raft_instance._log(
+                        f"Voto recibido del nodo {client_node_id} (total: {total_votes})"
+                    )
+                else:
+                    self.raft_instance._log(
+                        f"Voto denegado por el nodo {client_node_id}"
+                    )
+
+            except Exception as err:
+                self.raft_instance._log(
+                    f"Error al contactar nodo {client_node_id}: {err}"
+                )
+                # self._set_node_status(client_node_id, False)
+
+        if self.raft_instance.state != "candidate":
+            return
+
+        required_votes = required_votes // 2 + 1
+
+        if total_votes >= required_votes:
+            self.raft_instance._log(
+                f"¡Elección ganada con {total_votes}/{len(self._get_client_nodes()) + 1} votos!"
+            )
+            self.raft_instance.become_leader()
+        else:
+            self.raft_instance._log(
+                f"Elección perdida: votos={total_votes}, requeridos={required_votes}"
+            )
+            self.raft_instance.become_follower()
+
+    def _send_heartbeats(self):
+        heartbeat_interval = HEARTBEAT_INTERVAL
+
+        while True:
+            time.sleep(heartbeat_interval)
+
+            if self.raft_instance.state != "leader":
+                continue
+
+            # # Detectar cambios en nodos activos
+            # self._detect_node_state_changes()
+
+            # self._cleanup_completed_tasks()
+
+            for client_node_id, client_host, client_port in self._get_client_nodes():
+                threading.Thread(
+                    target=self._send_append_entries,
+                    args=(client_node_id, client_host, client_port),
+                    daemon=True,
+                ).start()
+
+    def _send_append_entries(
+        self, client_node_id: int, client_host: str, client_port: int
+    ):
+        if self.raft_instance.state != "leader":
+            return
+
+        try:
+            client_server = self._get_client_server(
+                client_node_id, client_host, client_port
+            )
+
+            if client_server is None:
+                # Nodo no está activo, no intentar enviar
+                return
+
+            next_idx = self.raft_instance.next_index.get(client_node_id, 1)
+            prev_log_index = next_idx - 1
+            prev_log_term = (
+                self.raft_instance.log[prev_log_index - 1].term
+                if prev_log_index > 0
+                else 0
+            )
+
+            entries = []
+            if next_idx <= len(self.raft_instance.log):
+                entries = [
+                    {"term": e.term, "command": e.command}
+                    for e in self.raft_instance.log[next_idx - 1 :]
+                ]
+                self.raft_instance._log(
+                    f"Enviando {len(entries)} entradas al nodo {client_node_id} "
+                    f"(prev_log_index={prev_log_index}, next_index={next_idx})"
+                )
+
+            current_term = self.raft_instance.current_term
+            response = client_server.append_entries(
+                current_term,
+                self.raft_instance.node_id,
+                prev_log_index,
+                prev_log_term,
+                self.raft_instance.commit_index,
+                entries,
+                self.raft_instance.global_index, # parametro nuevo que es el indice del lider
+            ) 
+
+            if self.raft_instance.state != "leader":
+                return
+
+            if response["success"]:
+                if entries:
+                    old_match = self.raft_instance.match_index[client_node_id]
+                    self.raft_instance.match_index[client_node_id] = (
+                        prev_log_index + len(entries)
+                    )
+                    self.raft_instance.next_index[client_node_id] = (
+                        self.raft_instance.match_index[client_node_id] + 1
+                    )
+                    self.raft_instance._log(
+                        f"Nodo {client_node_id} replicó exitosamente: "
+                        f"match_index {old_match} -> {self.raft_instance.match_index[client_node_id]}"
+                    )
+                elif prev_log_index == 0:
+                    self.raft_instance.match_index[client_node_id] = 0
+            else:
+                if response["term"] > self.raft_instance.current_term:
+                    self.raft_instance._log(
+                        f"Término superior descubierto {response['term']} desde nodo {client_node_id}, renunciando"
+                    )
+                    import logging
+                    res_term = response['term']
+                    logging.info(f"Término superior descubierto {res_term} desde nodo {client_node_id}, renunciando")
+                    self.raft_instance.become_follower(new_term=response["term"])
+                else:
+                    old_next = next_idx
+                    new_next = max(1, next_idx - 1)
+                    self.raft_instance.next_index[client_node_id] = new_next
+                    if old_next != new_next:
+                        self.raft_instance._log(
+                            f"AppendEntries rechazado por nodo {client_node_id}: "
+                            f"decrementando next_index {old_next} -> {new_next}"
+                        )
+
+        except Exception as e:
+            self.raft_instance._log(
+                f"Error al enviar AppendEntries a nodo {client_node_id}: {e}"
+            )
+            # self._set_node_status(client_node_id, False)
+
+    def _set_node_status(self, node_id: str, val: bool):
+        import logging
+        try:
+            with self.node_states_lock:
+                val = "ALIVE" if val else "DEAD"
+                self.node_states[node_id] = val
+
+        except Exception:
+            logging.error(f"[RAFT] Error poniendo estado {val} a nodo {node_id}")
+
+    def _update_commit_index(self):
+        if self.raft_instance.state != "leader":
+            return
+
+        for n in range(
+            len(self.raft_instance.log), self.raft_instance.commit_index, -1
+        ):
+            if n == 0:
+                break
+
+            if self.raft_instance.log[n - 1].term != self.raft_instance.current_term:
+                continue
+
+            replicated_count = 1
+            for match_idx in self.raft_instance.match_index.values():
+                if match_idx >= n:
+                    replicated_count += 1
+
+            required = (len(self._get_client_nodes()) + 1) // 2 + 1
+            if replicated_count >= required:
+                old_commit = self.raft_instance.commit_index
+                self.raft_instance.commit_index = n
+                self.raft_instance._log(
+                    f"Commit index actualizado: {old_commit} -> {n} "
+                    f"(replicado en {replicated_count}/{len(self._get_client_nodes()) + 1} nodos)"
+                )
+                break
+    
+    def _cleanup_completed_tasks(self):
+        """Mantiene solo las últimas 5 tareas completed en el log"""
+        with self.raft_instance.task_lock:
+            completed = [t for t in self.raft_instance.pending_tasks 
+                        if t["status"] == "completed"]
+            
+            if len(completed) > 5:
+                # Mantener solo las últimas 5
+                to_keep = completed[-5:]
+                to_remove = completed[:-5]
+                
+                for task in to_remove:
+                    self.raft_instance.pending_tasks.remove(task)
+                
+                self.raft_instance._log(f"Limpiadas {len(to_remove)} tareas completed antiguas")
+
+    def _get_client_nodes(self):
+        clients = [
+            (node.ip, node.hostname, self.port)
+            for node in get_service_tasks("spotify_clone")
+            if node.ip != self.host
+        ]
+
+        return clients
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Uso: python raft.py <node_id>")
+        sys.exit(1)
+
+    node_id = int(sys.argv[1])
+
+    host = "localhost"
+    port = 5000 + node_id
+
+    server = RaftServer(node_id, host, port)
+    server.start()
