@@ -19,9 +19,11 @@ class DBManager:
     """
 
     def __init__(self):
+        from raft.db_json_manager import DBJsonManager
         # Almacén temporal para operaciones sin commit
         self.pending_operations = {}  # {task_id: {"operation": ..., "data": ...}}
         self.pending_lock = threading.Lock()
+        self.json_manager = DBJsonManager()
 
     # GET
     def get_data(self, query_data: dict):
@@ -642,8 +644,7 @@ class DBManager:
         with self.pending_lock:
             return list(self.pending_operations.keys())
         
-    # JSON 
-    # TODO: implementar json_manager
+    # JSON
     def get_json_dump(self) -> dict:
         """Exporta el JSON completo del nodo"""
         return self.json_manager.read()

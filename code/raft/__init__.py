@@ -24,6 +24,7 @@ def get_my_ip():
 
 
 def initialize_node():
+    from .leader_manager import LeaderManager
     from .raft import RaftServer
     from .utils import (
         set_raft_instance,
@@ -36,31 +37,30 @@ def initialize_node():
 
     logger.info(f"Inicializando nodo {host} en {host}:{port}")
 
-    #TODO: Implementar LeaderManager con start y stop
     # 1) Crear LeaderManager primero PERO sin depender (todavía) del Raft real
-    # leader_manager = LeaderManager(host, port) 
+    leader_manager = LeaderManager(host, port)
 
     # 2) Crear RaftServer con callbacks
     raft = RaftServer(
         node_id=host,
         host=host,
         port=port,
-        # on_become_leader=leader_manager.start,
-        # on_non_being_leader=leader_manager.stop,
+        on_become_leader=leader_manager.start,
+        on_non_being_leader=leader_manager.stop,
     )
 
     # 3) Interconectar objetos
-    # leader_manager.raft = raft.raft_instance
-    # leader_manager.raft_server = raft
+    leader_manager.raft = raft.raft_instance
+    leader_manager.raft_server = raft
 
     # 4) Guardar globales accesibles para las vistas
     set_raft_server(raft)
     set_raft_instance(raft.raft_instance)
-    # set_leader_manager(leader_manager)
+    set_leader_manager(leader_manager)
 
     # 5) Iniciar hilo Raft
     thread = threading.Thread(target=raft.start, daemon=True)
     thread.start()
 
     logger.info("Nodo Raft y LeaderManager iniciados correctamente.")
-    return raft
+    return raft, leader_manager
