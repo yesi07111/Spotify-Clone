@@ -13,67 +13,65 @@ from backend.settings import CHUNK_SIZE
 class AudioStreamerSerializer(serializers.Serializer):
     chunk_index = serializers.IntegerField()
     chunk_count = serializers.IntegerField()
-    audio_id = serializers.CharField(max_length=50)
-    client_id = serializers.CharField(max_length=50)
-    include_header = serializers.BooleanField(default=False)
+    audio_id = serializers.CharField(max_length=100)
     include_metadata = serializers.BooleanField(default=False)
 
-    def handle_request(self, data):
-        chunk_index: int = data["chunk_index"]
-        chunk_count: int = data["chunk_count"]
-        audio_id: str = data["audio_id"]
-        include_metadata: bool = data["include_metadata"]
+    def handle_request(self, leader_manager, data):
+        import base64
 
-        filename = self.get_file_name(audio_id)
+        chunk_index = data["chunk_index"]
+        chunk_count = data["chunk_count"]
+        audio_id = data["audio_id"]
+        include_metadata = data["include_metadata"]
 
-        with open(filename, "rb") as wav_file:
-            wav_file.seek(0, 2)
-            file_size = wav_file.tell()
-            audio_data_size = file_size
-            total_chunks = (audio_data_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+        # LECTURA DISTRIBUIDA DE CHUNKS 
+        raw_chunks = leader_manager.read_file_chunks(
+            audio_id,
+            chunk_index,
+            chunk_count,
+        )
 
-            response = {
-                "chunk_index": chunk_index,
-                "chunk_count": min(chunk_count, total_chunks - chunk_index),
-            }
+        encoded_chunks = [base64.b64encode(c).decode() for c in raw_chunks]
 
-            if include_metadata:
+        response = {
+            "chunk_index": chunk_index,
+            "chunk_count": len(encoded_chunks),
+            "chunks": encoded_chunks,
+        }
+
+        # METADATOS
+        if include_metadata:
+            try:
                 track = Track.objects.get(id=audio_id)
 
-                channels = 2  # TODO
-                bitrate = track.bitrate
-                duration = track.duration_seconds
+                # Archivo en nodos (info del índice)
+                file_info = leader_manager._get_file_info_from_index(audio_id) or {}
 
                 response["metadata"] = {
-                    "channels": channels,
-                    "duration": duration,
-                    "total_chunks": total_chunks,
+                    "id": track.id,
+                    "title": track.title,
+                    "album": track.album.name if track.album else None,
+                    "artists": list(track.artist.values_list("name", flat=True)),
+                    "extension": track.extension,
+
+                    # del modelo
+                    "duration_seconds": track.duration_seconds,
+                    "bitrate": track.bitrate,
+
+                    # del índice distribuido (si están)
+                    "file_size": file_info.get("size", 0),
+                    "total_chunks": file_info.get("total_chunks", 0),
+                    "channels": file_info.get("channels", 2),
+                    "sample_rate": file_info.get("sample_rate", None),
+
+                    # fijo del sistema
                     "chunk_size": CHUNK_SIZE,
-                    "bitrate": bitrate,
-                    "file_size": file_size,
                 }
 
-            chunks = []
-            for i in range(chunk_count):
-                current_chunk_index = chunk_index + i
-                if current_chunk_index >= total_chunks:
-                    break
+            except Track.DoesNotExist:
+                pass
 
-                offset = current_chunk_index * CHUNK_SIZE
-                wav_file.seek(offset)
-
-                chunk_data = wav_file.read(min(CHUNK_SIZE, file_size - offset))
-                chunk_data = base64.b64encode(chunk_data)
-
-                chunks.append(chunk_data)
-
-            response["chunks"] = chunks
-
-            return response
-
-    def get_file_name(self, audio_id: str):
-        return f"../audios/{audio_id}"
-
+        return response
 
 class ArtistSerializer(serializers.ModelSerializer):
     class Meta:
@@ -99,7 +97,7 @@ class AlbumSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "name": {"required": True, "min_length": 1},
             "date": {"required": True},
-            "author": {"required": True},
+            "author": {"required": False},
             "id": {"required": False},
         }
 
@@ -113,7 +111,15 @@ class TrackSerializer(serializers.ModelSerializer):
     file_base64 = serializers.CharField(write_only=True, required=False)
     album_name = serializers.SerializerMethodField()
     artist_names = serializers.SerializerMethodField()
-
+    
+    # Cambiar artist para aceptar lista de IDs en lugar de objetos
+    artist = serializers.PrimaryKeyRelatedField(
+        many=True, 
+        queryset=Artist.objects.all(),
+        required=False,
+        allow_empty=True
+    )
+    
     class Meta:
         model = Track
         fields = [
@@ -129,30 +135,24 @@ class TrackSerializer(serializers.ModelSerializer):
             "extension",
         ]
         extra_kwargs = {
-            "title": {"required": True, "min_length": 1},
-            "artist": {"required": True},
-            "id": {"required": False},
+            "title": {"required": False, "allow_null": True, "allow_blank": True},
+            "artist": {"required": False},
+            "album": {"required": False, "allow_null": True},
+            "id": {"required": True},  # ID es requerido según tu swagger
             "duration_seconds": {"required": False},
             "bitrate": {"required": False},
             "extension": {"required": False},
         }
-
+    
     def get_audio_info(self, audio_bytes: bytes):
         audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-
-        # Obtener la duración en segundos
         duration_seconds = len(audio) / 1000.0
-
-        # Obtener el bitrate
         bitrate = audio.frame_rate * audio.frame_width * audio.channels
-
         extension = "unknown"
-
-        # Otros datos interesantes
         channels = audio.channels
         frame_rate = audio.frame_rate
         sample_width = audio.sample_width
-
+        
         @dataclass
         class AudioMetadata:
             duration_seconds: int
@@ -161,49 +161,16 @@ class TrackSerializer(serializers.ModelSerializer):
             channels: int
             frame_rate: int
             sample_width: int
-
+        
         metadata = AudioMetadata(
             duration_seconds, bitrate, extension, channels, frame_rate, sample_width
         )
-
         return metadata
-
+    
     def get_album_name(self, obj):
         return obj.album.name if obj.album else None
-
+    
     def get_artist_names(self, obj):
         return [artist.name for artist in obj.artist.all()]
-
-    def create(self, validated_data):
-        file_base64 = validated_data.pop("file_base64", None)
-
-        if not file_base64:
-            raise serializers.ValidationError("file_base64 is required.")
-
-        if "id" not in validated_data and file_base64:
-            validated_data["id"] = str(hash(file_base64))
-
-        existing_track = Track.objects.filter(id=validated_data["id"]).first()
-        if existing_track:
-            return existing_track
-
-        if file_base64:
-            data = base64.b64decode(file_base64)
-            metadata = self.get_audio_info(data)
-
-            validated_data["duration_seconds"] = metadata.duration_seconds
-            validated_data["bitrate"] = metadata.bitrate
-            validated_data["extension"] = metadata.extension
-
-        track = super().create(validated_data)
-
-        # Guardar el archivo en disco si existe file_base64
-        if file_base64:
-            audio_dir = "../audios"
-            if not os.path.exists(audio_dir):
-                os.makedirs(audio_dir)
-            file_path = os.path.join(audio_dir, f"{track.id}")
-            with open(file_path, "wb") as f:
-                f.write(data)
-
-        return track
+    
+    

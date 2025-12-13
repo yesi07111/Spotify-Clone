@@ -14,6 +14,8 @@ from pathlib import Path
 
 # Chunk size for audio streaming
 CHUNK_SIZE = 1 << 15  # 32kB
+CHUNK_RANGES = 3
+RPC_TIMEOUT = 2.0
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -28,9 +30,6 @@ SECRET_KEY = "django-insecure-f*f(p9+_a1h3%tr9^2ygs)(9pgjnvtv3p2p+t+0izl=44%of!r
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
-
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -44,10 +43,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "app",
+    "raft.apps.RaftConfig",
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -87,17 +87,6 @@ SPECTACULAR_SETTINGS = {
 }
 
 WSGI_APPLICATION = "backend.wsgi.application"
-
-
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
 
 
 # Password validation
@@ -141,18 +130,67 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Agregar al final de settings.py
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:3000",
-]
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:8080",
+#     "http://127.0.0.1:8080",
+#     "http://localhost:3000",
+#     "http://localhost:5173",  # ← AGREGAR: Puerto de Vite
+#     "http://127.0.0.1:5173",  # ← AGREGAR: Puerto de Vite
+#     "http://frontend:5173",   # ← AGREGAR: Nombre del servicio frontend en Docker
+# ]
 
 CORS_ALLOW_ALL_ORIGINS = True  # Solo para desarrollo
 
-# Para manejar archivos multimedia
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+ALLOWED_HOSTS = ["*"]
 
-# Crear directorio para audios
-AUDIO_ROOT = BASE_DIR / 'audios'
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:5173",
+#     "http://127.0.0.1:5173",
+#     "http://frontend:5173",
+#     "http://192.168.1.101:5173",  # ← IP frontend accediendo desde el host
+#     "http://192.168.1.100:8000",  # ← IP backend por si necesitas acceder directo
+# ]
+
+# # También agrega estos settings de CORS
+# CORS_ALLOW_CREDENTIALS = True
+# CORS_ALLOW_HEADERS = [
+#     'accept',
+#     'accept-encoding',
+#     'authorization',
+#     'content-type',
+#     'dnt',
+#     'origin',
+#     'user-agent',
+#     'x-csrftoken',
+#     'x-requested-with',
+# ]
+
+# Para manejar archivos multimedia
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Crear directorio para almacenamiento
+STORAGE_ROOT = BASE_DIR / "storage"
+
+# Aumentar el límite de carga de datos en memoria a 30MB
+# DATA_UPLOAD_MAX_MEMORY_SIZE = 30 * 1024 * 1024  # 30 MB
+
+# # También para archivos subidos
+# FILE_UPLOAD_MAX_MEMORY_SIZE = 30 * 1024 * 1024  # 30 MB
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
+
+# Database
+# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": "/spotify_db.sqlite3",
+    }
+}
+
+CHUNK_RANGES = 3  # Número de rangos (p) para dividir archivos
+RPC_TIMEOUT = 2.0  # Timeout para operaciones RPC
+OPERATION_CACHE_SIZE = 5  # Tamaño del cache de operaciones

@@ -14,7 +14,7 @@ class Album(models.Model):
     id = models.CharField(max_length=100, primary_key=True)
     name = models.CharField(max_length=100)
     date = models.DateField()
-    author = models.ForeignKey(to=Artist, on_delete=models.CASCADE)
+    author = models.ForeignKey(to=Artist, null=True, on_delete=models.DO_NOTHING)
 
     def __str__(self) -> str:
         return f'<album_id={self.id} | {self.name} | {self.date}>'
@@ -25,8 +25,8 @@ class Album(models.Model):
 class Track(models.Model):
     id = models.CharField(max_length=100, primary_key=True)
     title = models.CharField(max_length=100, null=True)
-    album = models.ForeignKey(to=Album, null=True, on_delete=models.CASCADE)
-    artist = models.ManyToManyField(to=Artist)
+    album = models.ForeignKey(to=Album, null=True, on_delete=models.DO_NOTHING)
+    artist = models.ManyToManyField(to=Artist, blank=True)
     duration_seconds = models.IntegerField(null=False)
     bitrate = models.IntegerField(null=False)
     extension = models.CharField(max_length=10)
