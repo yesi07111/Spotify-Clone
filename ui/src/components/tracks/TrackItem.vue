@@ -32,6 +32,24 @@
     </div>
     
     <div class="track-item-duration">{{ trackDuration }}</div>
+    
+    <!-- Botones de acción -->
+    <div class="track-item-actions">
+      <button 
+        class="btn btn-sm btn-outline-primary edit-btn"
+        @click.stop="handleEdit"
+        title="Editar canción"
+      >
+        <i class="fas fa-edit"></i>
+      </button>
+      <button 
+        class="btn btn-sm btn-outline-danger delete-btn"
+        @click.stop="handleDelete"
+        title="Eliminar canción"
+      >
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -87,6 +105,12 @@ export default {
     selectTrack() {
       this.$emit('track-selected', this.track)
     },
+    handleEdit() {
+      this.$emit('edit-track', this.track)
+    },
+    handleDelete() {
+      this.$emit('delete-track', this.track)
+    },
     loadImage() {
       this.currentImageUrl = getTrackImageUrl(this.track.title)
     },
@@ -107,8 +131,8 @@ export default {
     }
   }
 }
-
 </script>
+
 <style scoped>
 .track-item {
   display: flex;
@@ -195,6 +219,39 @@ export default {
   color: #6c757d;
   font-size: 0.875rem;
   margin-left: 1rem;
+  margin-right: 0.75rem;
+}
+
+.track-item-actions {
+  display: flex;
+  gap: 0.5rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.track-item:hover .track-item-actions {
+  opacity: 1;
+}
+
+.edit-btn, .delete-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.edit-btn:hover {
+  background-color: #0d6efd;
+  border-color: #0d6efd;
+}
+
+.delete-btn:hover {
+  background-color: #dc3545;
+  border-color: #dc3545;
 }
 
 @keyframes pulse {

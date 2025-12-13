@@ -1,3 +1,4 @@
+//store/modules/tracks.js
 import { API_BASE_URL } from '@/utils/constants'
 
 const state = {
@@ -61,6 +62,10 @@ const actions = {
       console.error('fetchSongs error', err)
       return []
     }
+  },
+
+  setTracks({ commit }, tracks) {
+    commit('SET_TRACKS', tracks)
   },
 
   async refreshSongs({ dispatch }) {
