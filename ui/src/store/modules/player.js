@@ -1,3 +1,4 @@
+// store/modules/player.js
 import AudioPlayerService from '@/services/AudioPlayerService'
 import PlaylistManager from '@/services/PlaylistManager'
 
