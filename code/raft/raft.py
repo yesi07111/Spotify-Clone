@@ -2,7 +2,6 @@
 import random
 import threading
 import time
-import sys
 import uuid
 import Pyro5.api as rpc
 
@@ -10,13 +9,12 @@ from dataclasses import dataclass
 from typing import List, Optional, Callable, Any, Dict
 
 from .db_manager import DBManager
-from .storage_manager import StorageManager, CHUNK_RANGES, RPC_TIMEOUT, CHUNK_SIZE
-from .discovery import get_service_tasks, discover_active_clients
+from .storage_manager import StorageManager
+from .discovery import get_service_tasks
 
 LOGGINGS_ENABLED = False
-HEARTBEAT_INTERVAL = 0.5
-ELECTION_TIMEOUT_RANGE = (1, 2)
-NODE_CHECK_INTERVAL = 0.5  # Intervalo para verificar nodos activos
+HEARTBEAT_INTERVAL = 1 #0.5 antes del DNS
+ELECTION_TIMEOUT_RANGE = (3, 7) #(1, 2) antes del DNS
 DB_REPLICATION_FACTOR = 3  # k nodos de base de datos
 
 
@@ -76,7 +74,6 @@ class RaftConsensusFunctions:
         self.db_replication_factor = DB_REPLICATION_FACTOR  # k nodos de base de datos (líder + k-1)
         self.pending_tasks = []  # Cola de tareas pendientes
         self.operation_cache = []  # Cache de últimas operaciones exitosas (máximo 5)
-        self.task_lock = threading.Lock()
         self._initialized = True
 
         self.node_id: int = node_id
@@ -93,7 +90,6 @@ class RaftConsensusFunctions:
         self.on_non_being_leader: Callable = on_non_being_leader or (lambda: None)
 
         self._timer: Optional[threading.Timer] = None
-        self._lock = threading.Lock()
         self.election_timeout_range = ELECTION_TIMEOUT_RANGE
         self.next_index: Dict[int, int] = {}
         self.match_index: Dict[int, int] = {}
@@ -113,10 +109,11 @@ class RaftConsensusFunctions:
         return Colors.RESET
 
     def _log(self, message: str):
+        import logging
         if not LOGGINGS_ENABLED:
             return
         color = self._get_color()
-        print(f"{color}[Node {self.node_id}] {message}{Colors.RESET}")
+        logging.info(f"{color}[Node {self.node_id}] {message}{Colors.RESET}")
 
     # STATE MANAGEMENT
 
@@ -360,7 +357,7 @@ class RaftConsensusFunctions:
             }
         
         # Revisar si ya existe la misma petición en pending
-        with self.task_lock:
+        with self._lock:
             for task in self.pending_tasks:
                 if task["status"] == "pending" and task.get("request_data") == command:
                     # Actualizar solo el term
@@ -539,7 +536,7 @@ class RaftConsensusFunctions:
 
     def add_pending_task(self, task_data: dict):
         """Agrega una tarea pendiente al log y a la cola"""
-        with self.task_lock:
+        with self._lock:
             # task_entry = {
             #     "type": "TASK_PENDING",
             #     "task_id": str(uuid.uuid4()),
@@ -560,7 +557,7 @@ class RaftConsensusFunctions:
 
     def update_task_status(self, task_id: str, status: str, result=None):
         """Actualiza el estado de una tarea"""
-        with self.task_lock:
+        with self._lock:
             for task in self.pending_tasks:
                 if task["task_id"] == task_id:
                     task["status"] = status
@@ -609,7 +606,7 @@ class RaftConsensusFunctions:
     #TODO: Hacer bien esta funcion
     def process_pending_tasks(self):
         """Procesa tareas pendientes (llamado cuando se vuelve líder)"""
-        with self.task_lock:
+        with self._lock:
             for task in self.pending_tasks:
                 if task["status"] == "pending":
                     self._log(f"Retomando tarea pendiente: {task['task_id']}")
@@ -624,7 +621,7 @@ class RaftConsensusFunctions:
         """
         self._log("Recuperando tareas pendientes del log...")
         
-        with self.task_lock:
+        with self._lock:
             # Buscar tareas pendientes en el log
             for log_entry in self.log:
                 if isinstance(log_entry.command, dict):
@@ -662,8 +659,8 @@ class RaftConsensusFunctions:
             self._log(f"Total de tareas pendientes: {len(self.pending_tasks)}")
     
 class RaftServer:
-    _instance = None
     _lock = threading.Lock()
+    _instance = None
 
     def __new__(cls, *args, **kwargs):
         """
@@ -706,7 +703,6 @@ class RaftServer:
 
         # Tabla de nodos activos
         self.node_states = {}  # {node_id: "DEAD" | "ALIVE" | "RE-SPAWN" | "NEW"}
-        self.node_states_lock = threading.Lock()
         self.previous_active_nodes = set()
 
         self.raft_instance._log(
@@ -750,23 +746,22 @@ class RaftServer:
         """
         Inicializa el daemon de Pyro5 si no se creó antes.
         """
-        import Pyro5.api
 
-        self.daemon = Pyro5.api.Daemon(host=self.host, port=self.port)
+        self.daemon = rpc.Daemon(host=self.host, port=self.port)
 
     def _is_node_active(self, client_id: int) -> bool:
         """Verifica si un nodo está activo según node_states"""
-        with self.node_states_lock:
+        with self._lock:
             return self.node_states.get(client_id) == "ALIVE"
 
     def _get_client_server(
-        self, client_id: int, client_host: str, client_port: int, type: str = "node"
+        self, client_id: int, client_host: str, client_port: int, type: str = "node", requires_validation:bool=True
     ) -> Optional[rpc.Proxy]:
         """
         Obtiene un proxy para comunicarse con un nodo.
         Retorna None si el nodo no está activo.
         """
-        if not self._is_node_active(client_id):
+        if requires_validation and not self._is_node_active(client_id):
             self.raft_instance._log(f"Nodo {client_id} no está activo, omitiendo proxy")
             return None
 
@@ -774,11 +769,10 @@ class RaftServer:
             uri = f"PYRO:raft.{type}.{client_id}@{client_host}:{client_port}"
             import logging
             if type != "node":
-                logging.info(f"\n\n[Raft] Se creo el proxy RCP al {client_id} con URI: {uri}")
+                logging.info(f"\n\n[Raft] Se creo el proxy RPC al {client_id} con URI: {uri}")
             return rpc.Proxy(uri)
         except Exception as e:
             self.raft_instance._log(f"Error al crear proxy para nodo {client_id}: {e}")
-            # self._set_node_status(client_id, False)
             return None
 
     def on_timer_end(self):
@@ -802,7 +796,7 @@ class RaftServer:
                 )
 
                 client_server = self._get_client_server(
-                    client_node_id, client_host, client_port
+                    client_node_id, client_host, client_port, requires_validation=False
                 )
 
                 if client_server is None:
@@ -888,7 +882,7 @@ class RaftServer:
 
         try:
             client_server = self._get_client_server(
-                client_node_id, client_host, client_port
+                client_node_id, client_host, client_port, requires_validation=False
             )
 
             if client_server is None:
@@ -971,7 +965,7 @@ class RaftServer:
     def _set_node_status(self, node_id: str, val: bool):
         import logging
         try:
-            with self.node_states_lock:
+            with self._lock:
                 val = "ALIVE" if val else "DEAD"
                 self.node_states[node_id] = val
 
@@ -1006,9 +1000,10 @@ class RaftServer:
                 )
                 break
     
+    # Esto no hace lo que dice que hace
     def _cleanup_completed_tasks(self):
         """Mantiene solo las últimas 5 tareas completed en el log"""
-        with self.raft_instance.task_lock:
+        with self.raft_instance._lock:
             completed = [t for t in self.raft_instance.pending_tasks 
                         if t["status"] == "completed"]
             
@@ -1025,22 +1020,8 @@ class RaftServer:
     def _get_client_nodes(self):
         clients = [
             (node.ip, node.hostname, self.port)
-            for node in get_service_tasks("spotify_clone")
+            for node in get_service_tasks()
             if node.ip != self.host
         ]
 
         return clients
-
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Uso: python raft.py <node_id>")
-        sys.exit(1)
-
-    node_id = int(sys.argv[1])
-
-    host = "localhost"
-    port = 5000 + node_id
-
-    server = RaftServer(node_id, host, port)
-    server.start()
