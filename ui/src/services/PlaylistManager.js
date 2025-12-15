@@ -1,18 +1,7 @@
-import { API_BASE_URL } from '@/utils/constants'
-
-function buildUrl(base, params = {}) {
-  const url = new URL(base)
-  Object.entries(params).forEach(([k, v]) => {
-    if (v === null || v === undefined) return
-    url.searchParams.append(k, v)
-  })
-  return url.toString()
-}
+import ApiService from '@/services/ApiService'
 
 export default class PlaylistManager {
-  constructor(apiBase = API_BASE_URL || 'http://localhost:8000/api') {
-    const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : 'http://localhost:8000/api'
-    this.apiUrl = `${base}/tracks/`
+  constructor() {
     this.tracks = []
     this.currentIndex = 0
     this.filters = { artist: null, album: null, name: null }
@@ -21,19 +10,16 @@ export default class PlaylistManager {
     this.loadSongs()
   }
 
-  async _fetchJson(url, options = {}) {
-    const res = await fetch(url, options)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.json()
-  }
-
   async loadSongs(params = {}) {
     if (this._loading && this._lastLoadPromise) return this._lastLoadPromise
+    
     this._loading = true
     const merged = { ...this.filters, ...params }
-    const url = buildUrl(this.apiUrl, merged)
-    const p = this._fetchJson(url)
-      .then(data => {
+    
+    const p = ApiService.getTracks(merged)
+      .then(response => {
+        // Axios devuelve la respuesta en .data
+        const data = response.data
         this.tracks = Array.isArray(data) ? data : (data.results || [])
         if (!this.tracks) this.tracks = []
         if (this.currentIndex >= this.tracks.length) this.currentIndex = 0
@@ -46,6 +32,7 @@ export default class PlaylistManager {
       .finally(() => {
         this._loading = false
       })
+    
     this._lastLoadPromise = p
     return p
   }
@@ -90,7 +77,6 @@ export default class PlaylistManager {
     let currentTrack = null
     let otherTracks = tracks
     
-    // Si hay una canción actual, separarla
     if (currentSongId) {
       const currentIndex = tracks.findIndex(t => t.id === currentSongId)
       if (currentIndex >= 0) {
@@ -99,7 +85,6 @@ export default class PlaylistManager {
       }
     }
     
-    // Mezclar el resto usando Fisher-Yates
     for (let i = otherTracks.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       const tmp = otherTracks[i]
@@ -107,25 +92,54 @@ export default class PlaylistManager {
       otherTracks[j] = tmp
     }
     
-    // Reconstruir con canción actual al inicio
     this.tracks = currentTrack ? [currentTrack, ...otherTracks] : otherTracks
     this.currentIndex = 0
   }
 
   async addSong(songData = {}) {
     try {
-      const res = await fetch(this.apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(songData)
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const created = await res.json()
+      const response = await ApiService.createTrack(songData)
+      const created = response.data
       this.tracks.push(created)
       return created
     } catch (err) {
       console.error('PlaylistManager addSong error', err)
       return null
+    }
+  }
+
+  async updateSong(id, songData) {
+    try {
+      const response = await ApiService.updateTrack(id, songData)
+      const updated = response.data
+      
+      // Actualizar en la lista local
+      const index = this.tracks.findIndex(track => track.id === id)
+      if (index !== -1) {
+        this.tracks[index] = { ...this.tracks[index], ...updated }
+      }
+      
+      return updated
+    } catch (err) {
+      console.error('PlaylistManager updateSong error', err)
+      return null
+    }
+  }
+
+  async deleteSong(id) {
+    try {
+      await ApiService.deleteTrack(id)
+      
+      // Eliminar de la lista local
+      this.tracks = this.tracks.filter(track => track.id !== id)
+      if (this.currentIndex >= this.tracks.length) {
+        this.currentIndex = Math.max(0, this.tracks.length - 1)
+      }
+      
+      return true
+    } catch (err) {
+      console.error('PlaylistManager deleteSong error', err)
+      return false
     }
   }
 

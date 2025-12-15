@@ -1,6 +1,7 @@
 #storage_manager.py
 import os
 from math import ceil
+from venv import logger
 import Pyro5.api as rpc
 
 from backend.settings import CHUNK_SIZE, STORAGE_ROOT, CHUNK_RANGES, RPC_TIMEOUT, CHUNK_SIZE
@@ -73,14 +74,20 @@ class StorageManager:
         Crea un archivo con un rango específico de chunks.
         range_id: identificador del rango, ej: "0-78"
         """
+        import logging
         # Crear subdirectorio para el archivo si no existe
+        if isinstance(data, dict):
+            logger.info(data.keys())
         file_dir = os.path.join(self.storage_path, filename)
         os.makedirs(file_dir, exist_ok=True)
         
+        logging.info("Se va a escribir el shard...")
         # Guardar el rango
         range_path = os.path.join(file_dir, f"range_{range_id}")
         with open(range_path, "wb") as f:
             f.write(data)
+        
+        logging.info(f"Se creo el shard de nombre {filename} con el range_id: {range_id}")
         
         return True
 
@@ -88,10 +95,12 @@ class StorageManager:
         """
         Obtiene todos los chunks de un rango específico.
         """
+        import logging
         file_dir = os.path.join(self.storage_path, filename)
         range_path = os.path.join(file_dir, f"range_{range_id}")
         
         if not os.path.isfile(range_path):
+            logging.error(f"Rango {range_id} no encontrado para {filename}")
             raise FileNotFoundError(f"Rango {range_id} no encontrado para {filename}")
         
         with open(range_path, "rb") as f:

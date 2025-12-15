@@ -1,21 +1,24 @@
-# code/Dockerfile
 FROM python:3.10-alpine
 
-# RUN apk add --no-cache sqlite3 jq
-
-# Instalar dependencias del sistema incluyendo ffmpeg
-RUN apk update && apk add --no-cache ffmpeg
+# Instalar dependencias del sistema (Alpine usa 'apk')
+RUN apk update && apk add --no-cache \
+    ffmpeg \
+    gcc \
+    musl-dev \
+    libffi-dev \
+    make \
+    && rm -rf /var/cache/apk/*
 
 WORKDIR /app
 
-# Copiar requirements e instalar dependencias Python
+# Solo copiar requirements primero para cache
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el resto del proyecto
+RUN pip install -r requirements.txt
+
+# Ahora sí copiar el resto (pero ya reducido por el .dockerignore)
 COPY . .
 
 EXPOSE 8000
 
-# Ejecutar migraciones y luego iniciar el servidor
-CMD ["sh", "-c", "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"]
+CMD ["sh","-c","python manage.py migrate && python manage.py runserver 0.0.0.0:8000"]

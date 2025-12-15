@@ -409,6 +409,7 @@ class RaftConsensusFunctions:
             }
             self.global_index["db_nodes"].add(self.node_id)
             self.global_index["version"] += 1
+            remote_db.db_manager.json_manager.ensure_json_exists()
             return
         
         # Encontrar nodo con mayor db_version
@@ -752,7 +753,7 @@ class RaftServer:
     def _is_node_active(self, client_id: int) -> bool:
         """Verifica si un nodo está activo según node_states"""
         with self._lock:
-            return self.node_states.get(client_id) == "ALIVE"
+            return self.node_states.get(client_id) != "DEAD"
 
     def _get_client_server(
         self, client_id: int, client_host: str, client_port: int, type: str = "node", requires_validation:bool=True
@@ -767,10 +768,9 @@ class RaftServer:
 
         try:
             uri = f"PYRO:raft.{type}.{client_id}@{client_host}:{client_port}"
-            import logging
-            if type != "node":
-                logging.info(f"\n\n[Raft] Se creo el proxy RPC al {client_id} con URI: {uri}")
-            return rpc.Proxy(uri)
+            proxy = rpc.Proxy(uri)
+            proxy._pyroSerializer = "marshal"
+            return proxy
         except Exception as e:
             self.raft_instance._log(f"Error al crear proxy para nodo {client_id}: {e}")
             return None

@@ -12,9 +12,9 @@ class DBJsonManager:
     
     def __init__(self):
         self.lock = threading.Lock()
-        self._ensure_json_exists()
+        # self._ensure_json_exists()
     
-    def _ensure_json_exists(self):
+    def ensure_json_exists(self):
         """Crea el JSON si no existe"""
         if not os.path.exists(DB_JSON_PATH):
             from raft.utils import get_raft_instance
@@ -62,6 +62,14 @@ class DBJsonManager:
             "sql_operation": sql_operation,
             "status": "pending"
         })
+
+        self.update_json_term(term)
+
+        from raft.utils import get_raft_instance
+        raft = get_raft_instance()
+
+        if raft and raft.node_id:
+            self.update_node_id(raft.node_id)
         
         self.write(data)
     
@@ -83,6 +91,16 @@ class DBJsonManager:
         data["db_version"] = data["db_version"] + 1
         self.write(data)
     
+    def update_json_term(self, new_term):
+        data = self.read()
+        data["term"] = new_term
+        self.write(data)
+
+    def update_node_id(self, node_id):
+        data = self.read()
+        data["node_id"] = node_id
+        self.write(data)
+
     def get_db_versions(self) -> tuple:
         """Retorna (db_version, db_version_prev)"""
         data = self.read()
@@ -92,6 +110,16 @@ class DBJsonManager:
         """Retorna operaciones en estado pending"""
         data = self.read()
         return [op for op in data["log"] if op["status"] == "pending"]
+    
+    def get_completed_operations(self) -> list:
+        """Retorna operaciones en estado completed"""
+        data = self.read()
+        return [op for op in data["log"] if op["status"] == "completed"]
+    
+    def get_all_operations(self) -> list:
+        """Retorna operaciones en estado completed"""
+        data = self.read()
+        return [op for op in data["log"]]
     
     def exists(self) -> bool:
         """Verifica si el JSON existe (indica que es nodo DB)"""

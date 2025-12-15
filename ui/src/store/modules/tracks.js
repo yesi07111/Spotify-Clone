@@ -1,5 +1,5 @@
-//store/modules/tracks.js
-import { API_BASE_URL } from '@/utils/constants'
+// store/modules/tracks.js
+import ApiService from '@/services/ApiService'
 
 const state = {
   tracks: [],
@@ -9,7 +9,8 @@ const state = {
     artists: [],
     album: null
   },
-  isFiltersVisible: false
+  isFiltersVisible: false,
+  isLoading: false
 }
 
 const mutations = {
@@ -31,6 +32,9 @@ const mutations = {
   CLEAR_FILTERS(state) {
     state.activeFilters = { artists: [], album: null }
     state.searchQuery = ''
+  },
+  SET_LOADING(state, isLoading) {
+    state.isLoading = isLoading
   }
 }
 
@@ -48,19 +52,27 @@ const actions = {
 
   async fetchSongs({ commit, dispatch }) {
     try {
-      const response = await fetch(`${API_BASE_URL}/tracks/`)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const songs = await response.json()
-
-      commit('SET_ALL_TRACKS', songs)
-      commit('SET_TRACKS', songs)
-
+      commit('SET_LOADING', true)
+      console.log('[TRACKS STORE] Fetching all songs...')
+      
+      const response = await ApiService.getTracks()
+      const songs = response.data
+      
+      console.log(`[TRACKS STORE] Fetched ${songs?.length || 0} songs`)
+      
+      commit('SET_ALL_TRACKS', songs || [])
+      commit('SET_TRACKS', songs || [])
+      
+      // Actualizar playlist del player
       dispatch('player/updatePlaylistFromTracks', null, { root: true })
-
-      return songs
+      
+      return songs || []
     } catch (err) {
-      console.error('fetchSongs error', err)
+      console.error('[TRACKS STORE] fetchSongs error:', err)
+      console.error('Error details:', err.response?.data)
       return []
+    } finally {
+      commit('SET_LOADING', false)
     }
   },
 
@@ -79,46 +91,104 @@ const actions = {
 
   async applyFilters({ state, commit, dispatch }) {
     try {
-      // Construir query params para backend
-      const params = new URLSearchParams()
-
-      // Filtros de modal (backend)
+      commit('SET_LOADING', true)
+      
+      // Construir params para backend
+      const params = {}
+      
+      // Filtros de artistas
       if (state.activeFilters.artists && state.activeFilters.artists.length > 0) {
-        state.activeFilters.artists.forEach(artistId => {
-          params.append('artist[]', artistId)
-        })
+        // Si el backend espera array: artist__in=id1,id2,id3
+        params.artist__in = state.activeFilters.artists.join(',')
       }
-
+      
+      // Filtro de álbum
       if (state.activeFilters.album) {
-        params.append('album', state.activeFilters.album)
+        params.album = state.activeFilters.album
       }
-
-      // Filtro de búsqueda (backend también)
+      
+      // Filtro de búsqueda
       if (state.searchQuery && state.searchQuery.trim()) {
-        params.append('title', state.searchQuery.trim())
+        // Depende de tu backend - podría ser 'search', 'q', 'title__icontains'
+        params.search = state.searchQuery.trim()
+        // O si tu backend Django usa icontains:
+        // params.title__icontains = state.searchQuery.trim()
       }
-
-      // Hacer request al backend con filtros
-      const url = `${API_BASE_URL}/tracks/${params.toString() ? '?' + params.toString() : ''}`
-      console.log('🔍 Fetching filtered tracks:', url)
-
-      const response = await fetch(url)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const filtered = await response.json()
-
+      
+      console.log('[TRACKS STORE] Applying filters with params:', params)
+      
+      const response = await ApiService.getTracks(params)
+      const filtered = response.data || []
+      
+      console.log(`[TRACKS STORE] Got ${filtered.length} filtered tracks`)
+      
       commit('SET_TRACKS', filtered)
+      
+      // Actualizar playlist del player
       dispatch('player/updatePlaylistFromTracks', null, { root: true })
-
+      
     } catch (error) {
-      console.error('Error applying filters:', error)
+      console.error('[TRACKS STORE] Error applying filters:', error)
+      console.error('Error details:', error.response?.data)
+      
       // Fallback a todos los tracks si hay error
       commit('SET_TRACKS', state.allTracks)
+    } finally {
+      commit('SET_LOADING', false)
     }
   },
 
   clearAllFilters({ commit, dispatch }) {
     commit('CLEAR_FILTERS')
     dispatch('applyFilters')
+  },
+  
+  // Acciones adicionales para CRUD de tracks
+  async createTrack({ dispatch }, trackData) {
+    try {
+      console.log('[TRACKS STORE] Creating track:', trackData)
+      const response = await ApiService.createTrack(trackData)
+      const newTrack = response.data
+      
+      // Refrescar lista
+      await dispatch('fetchSongs')
+      
+      return newTrack
+    } catch (error) {
+      console.error('[TRACKS STORE] Error creating track:', error)
+      throw error
+    }
+  },
+  
+  async updateTrack({ dispatch }, { id, trackData }) {
+    try {
+      console.log(`[TRACKS STORE] Updating track ${id}:`, trackData)
+      const response = await ApiService.updateTrack(id, trackData)
+      const updatedTrack = response.data
+      
+      // Refrescar lista
+      await dispatch('fetchSongs')
+      
+      return updatedTrack
+    } catch (error) {
+      console.error(`[TRACKS STORE] Error updating track ${id}:`, error)
+      throw error
+    }
+  },
+  
+  async deleteTrack({ dispatch }, id) {
+    try {
+      console.log(`[TRACKS STORE] Deleting track ${id}`)
+      await ApiService.deleteTrack(id)
+      
+      // Refrescar lista
+      await dispatch('fetchSongs')
+      
+      return true
+    } catch (error) {
+      console.error(`[TRACKS STORE] Error deleting track ${id}:`, error)
+      throw error
+    }
   }
 }
 
@@ -128,6 +198,10 @@ const getters = {
     return (state.activeFilters.artists && state.activeFilters.artists.length > 0) ||
       state.activeFilters.album !== null ||
       (state.searchQuery && state.searchQuery.trim().length > 0)
+  },
+  isLoading: state => state.isLoading,
+  getTrackById: state => (id) => {
+    return state.allTracks.find(track => track.id === id)
   }
 }
 

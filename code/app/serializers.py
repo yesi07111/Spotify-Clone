@@ -21,40 +21,43 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
-        # El frontend envía el hash SHA256 de la contraseña
-        # Aquí aplicamos un segundo hash para seguridad adicional
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        username = attrs.get('username')
         password = attrs.get('password')
         
-        # Aplicar hash PBKDF2 al hash recibido
-        import hashlib
-        import base64
+        logger.info(f"=== DEBUG LOGIN ===")
+        logger.info(f"Username recibido: {username}")
+        logger.info(f"Password recibido: {password}")
+        logger.info(f"Password length: {len(password)}")
         
-        # Primero decodificamos el hash SHA256 (viene en hex)
-        sha256_hash = password
-        # Aplicamos un segundo hash (SHA256 del SHA256)
-        double_hash = hashlib.sha256(sha256_hash.encode()).hexdigest()
+        # PRUEBA: Ver el usuario en la BD en este momento
+        try:
+            user = User.objects.get(username=username)
+            logger.info(f"Usuario encontrado en BD: {user.username}")
+            logger.info(f"Password en BD (primeros 80 chars): {user.password[:80]}")
+            logger.info(f"¿Password es hash? pbkdf2_: {user.password.startswith('pbkdf2_')}")
+            logger.info(f"¿Password es hash? argon2: {user.password.startswith('argon2')}")
+            
+            # Probar check_password directamente
+            from django.contrib.auth.hashers import check_password
+            password_match = check_password(password, user.password)
+            logger.info(f"check_password result: {password_match}")
+            
+        except User.DoesNotExist:
+            logger.error(f"Usuario {username} NO EXISTE en BD")
         
-        # Actualizamos la contraseña para la autenticación
-        attrs['password'] = double_hash
+        logger.info("Intentando super().validate()...")
         
-        data = super().validate(attrs)
+        try:
+            data = super().validate(attrs)
+            logger.info("✅ super().validate() EXITOSO")
+        except Exception as e:
+            logger.error(f"❌ ERROR en super().validate(): {str(e)}")
+            raise
         
-        # Añadir información adicional del usuario
-        user = self.user
-        refresh = self.get_token(user)
-        
-        data.update({
-            'user': {
-                'id': str(user.id),
-                'username': user.username,
-                'email': user.email,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'is_verified': user.is_verified,
-            },
-            'refresh_token_version': user.refresh_token_version,
-        })
-        
+        # Resto del código...
         return data
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -64,67 +67,58 @@ class RegisterSerializer(serializers.ModelSerializer):
         style={'input_type': 'password'},
         min_length=8
     )
-    confirm_password = serializers.CharField(
-        write_only=True,
-        required=True,
-        style={'input_type': 'password'}
-    )
     
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'email', 'password', 'confirm_password',
+            'id', 'username', 'email', 'password',
             'first_name', 'last_name'
         ]
-        read_only_fields = ['id']
-        extra_kwargs = {
-            'email': {'required': False},
-            'username': {
-                'validators': [UniqueValidator(queryset=User.objects.all())]
-            }
-        }
-    
-    def validate(self, attrs):
-        if attrs['password'] != attrs['confirm_password']:
-            raise serializers.ValidationError({
-                "confirm_password": "Las contraseñas no coinciden"
-            })
-        
-        # Validar fortaleza de contraseña
-        password = attrs['password']
-        errors = []
-        
-        if not any(c.islower() for c in password):
-            errors.append("La contraseña debe contener al menos una letra minúscula")
-        if not any(c.isupper() for c in password):
-            errors.append("La contraseña debe contener al menos una letra mayúscula")
-        if not any(c.isdigit() for c in password):
-            errors.append("La contraseña debe contener al menos un número")
-        
-        if errors:
-            raise serializers.ValidationError({"password": errors})
-        
-        return attrs
     
     def create(self, validated_data):
-        validated_data.pop('confirm_password')
+        import logging
+        logger = logging.getLogger(__name__)
         
-        # Hash de la contraseña antes de guardar
-        # El frontend ya envió SHA256, aplicamos PBKDF2
-        from django.contrib.auth.hashers import make_password
+        logger.info(f"[REGISTER] Creando usuario: {validated_data.get('username')}")
         
-        # El password viene como hash SHA256 del frontend
-        sha256_hash = validated_data['password']
-        # Aplicamos PBKDF2 para almacenamiento seguro
-        validated_data['password'] = make_password(sha256_hash)
+        # Extraer la contraseña
+        password = validated_data.pop('password')
+        logger.info(f"[REGISTER] Password recibido: {password[:3]}... (len: {len(password)})")
         
-        user = User.objects.create_user(**validated_data)
+        # Crear usuario sin contraseña
+        user = User.objects.create(**validated_data)
+        logger.info(f"[REGISTER] Usuario creado: {user.username}")
+        
+        # DEBUG: Ver estado antes de set_password
+        logger.info(f"[REGISTER] Password antes de set_password: {user.password}")
+        
+        # Establecer contraseña con hashing
+        user.set_password(password)
+        user.save()
+        
+        # DEBUG: Ver estado después de set_password
+        logger.info(f"[REGISTER] Password después de set_password: {user.password[:80]}...")
+        logger.info(f"[REGISTER] ¿Es hash pbkdf2? {user.password.startswith('pbkdf2_')}")
+        
+        # Verificar inmediatamente
+        from django.contrib.auth.hashers import check_password
+        check_result = check_password(password, user.password)
+        logger.info(f"[REGISTER] check_password verificación: {check_result}")
+        
+        if not check_result:
+            logger.error(f"[REGISTER] ERROR: set_password NO funcionó para {user.username}")
+            # Fallback manual
+            from django.contrib.auth.hashers import make_password
+            user.password = make_password(password)
+            user.save()
+            logger.info(f"[REGISTER] Hash aplicado manualmente")
         
         # Generar token de verificación
         user.generate_verification_token()
         
+        logger.info(f"[REGISTER] Usuario {user.username} creado exitosamente")
         return user
-
+    
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -137,14 +131,8 @@ class UserSerializer(serializers.ModelSerializer):
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(required=True, write_only=True)
     new_password = serializers.CharField(required=True, write_only=True, min_length=8)
-    confirm_new_password = serializers.CharField(required=True, write_only=True)
     
-    def validate(self, attrs):
-        if attrs['new_password'] != attrs['confirm_new_password']:
-            raise serializers.ValidationError({
-                "confirm_new_password": "Las nuevas contraseñas no coinciden"
-            })
-        
+    def validate(self, attrs):        
         # Validar que la nueva contraseña sea diferente a la actual
         if attrs['current_password'] == attrs['new_password']:
             raise serializers.ValidationError({
@@ -176,13 +164,8 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField(required=True)
     new_password = serializers.CharField(required=True, write_only=True, min_length=8)
-    confirm_new_password = serializers.CharField(required=True, write_only=True)
     
     def validate(self, attrs):
-        if attrs['new_password'] != attrs['confirm_new_password']:
-            raise serializers.ValidationError({
-                "confirm_new_password": "Las contraseñas no coinciden"
-            })
         return attrs
 
 

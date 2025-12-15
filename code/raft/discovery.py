@@ -19,6 +19,10 @@ class ContainerInfo:
     port: Optional[int] = None
 
 
+# ============================================================
+#   MÉTODO ÚNICO: DNS POR ALIAS (como tu amigo)
+# ============================================================
+
 def _discover_by_alias_dns(
     alias: str = "spotify_cluster",
     retries: int = 3,
@@ -70,6 +74,12 @@ def get_service_tasks(service_name: str = "spotify_clone") -> List[ContainerInfo
         pass
 
     raise RuntimeError("No se pudo descubrir nodos usando DNS ni Docker API")
+
+
+# ============================================================
+#   MÉTODO ORIGINAL: discover_active_clients
+#   NO SE MODIFICA SU FIRMA NI SU RETORNO
+# ============================================================
 
 
 def discover_active_clients(service_name: str = "spotify_clone") -> List[str]:

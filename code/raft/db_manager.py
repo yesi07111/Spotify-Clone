@@ -56,7 +56,7 @@ class DBManager:
         from app.models import Artist, Album, Track
         
         # Normalizar metadata a objeto si es necesario
-        metadata_obj = self._normalize_to_object(metadata=metadata)
+        metadata_obj = self._normalize_to_object(metadata_obj=metadata)
         if metadata_obj is None:
             return False
             
@@ -93,7 +93,7 @@ class DBManager:
         from app.models import Artist, Album, Track
         
         # Normalizar metadata a objeto si es necesario
-        metadata_obj = self._normalize_to_object(metadata=metadata)
+        metadata_obj = self._normalize_to_object(metadata_obj=metadata)
         if metadata_obj is None:
             return {"error": "Invalid metadata"}
             
@@ -170,7 +170,7 @@ class DBManager:
         
         try:
             # Normalizar metadata a objeto si es necesario
-            metadata_obj = self._normalize_to_object(metadata=metadata)
+            metadata_obj = self._normalize_to_object(metadata_obj=metadata)
             if metadata_obj is None:
                 return False
                 
@@ -422,8 +422,8 @@ class DBManager:
         Fase 1: Prepara una creación sin hacer commit.
         Retorna True si se puede hacer, False si hay error.
         """
-        from app.models import Artist, Album, Track
-        import logging
+        from app.models import Artist, Track
+        # import logging
 
         # Normalizar entrada a objeto
         obj_to_process = self._normalize_to_object(
@@ -462,8 +462,6 @@ class DBManager:
             sql_operation=json.dumps(operation_info)
         )
 
-        logging.info("\n\n[DB_Manager] prepare_create para %s", model_cls.__name__)
-
         try:
             # Extraer campos excluyendo ManyToMany
             data_dict = self._extract_fields(obj_to_process)
@@ -494,7 +492,6 @@ class DBManager:
 
                 # Guardar en pending (antes del commit)
                 with self.pending_lock:
-                    logging.info(f"\n\n[DB_Manager] Guardando operación pendiente para task_id: {task_id}")
                     self.pending_operations[task_id] = {
                         "operation": "create",
                         "model": model_name_lower,
@@ -502,7 +499,8 @@ class DBManager:
                         "data": self._serialize(obj),
                         "savepoint": transaction.savepoint()
                     }
-                    logging.info(f"Se guardó el task_id {task_id} en pending_operations")
+                    logging.info("[DB_MANAGER] Prepare Create/Update - OK")
+
 
                 return {"success": True, "prepared": True, "data": self._serialize(obj)}
         
@@ -515,7 +513,8 @@ class DBManager:
         """
         Fase 1: Prepara una eliminación sin hacer commit.
         """
-        from app.models import Artist, Album, Track
+        # from app.models import Artist, Album, Track
+        import logging
 
         # Normalizar entrada a objeto
         obj_to_process = self._normalize_to_object(
@@ -568,9 +567,9 @@ class DBManager:
                         "model": model_cls.__name__.lower(),
                         "object_id": obj.id,
                         "backup_data": self._serialize(obj),
-                        "savepoint": transaction.savepoint()
-                    }
-
+                        "savepoint": transaction.savepoint()    
+                    } 
+                logging.info("[DB_MANAGER] Prepare Delete - OK")
                 # Realizar la eliminación (aún no confirmada)
                 obj.delete()
 
@@ -584,14 +583,8 @@ class DBManager:
         Fase 2: Hace commit de una operación preparada.
         """
         import logging
-        if node_id is not None:
-            logging.info(f"\n\n[DB_Manager] commit_operation - Se entro aqui con node_id: {node_id}")
-        logging.info(f"[DB_Manager] commit_operation - DENTRO Commiting operation for task_id: {task_id}")
-        logging.info(f"Pending operations actuales: {self.pending_operations.keys()}")
         with self.pending_lock:
-            logging.info(f"\n\nIntentando commitear task_id: {task_id}")
             if task_id not in self.pending_operations:
-                logging.info(f"Task {task_id} not found in pending operations")
                 return {"success": False, "error": "Task not found"}
             
             try:
@@ -608,13 +601,13 @@ class DBManager:
                 
                 # Limpiar pending
                 del self.pending_operations[task_id]
-                logging.info(f"[DB_Manager] commit_operation - OK")
+                logging.info("[DB_Manager] Resultado de commit - OK")
                 
                 return {"success": True, "committed": True}
             
             except Exception as e:
-                logging.error(f"Error committing operation for task_id {task_id}: {e}")
-                return {"success": False, "errorrrrr": str(e)}
+                logging.error(f"Error al hacer commit a la operación con task_id {task_id}: {e}")
+                return {"success": False, "error": str(e)}
 
     def rollback_operation(self, task_id: str):
         """
@@ -658,11 +651,11 @@ class DBManager:
         """Ejecuta operaciones pending del JSON"""
         import logging
         import json
-        from app.models import Artist, Album, Track
+        # from app.models import Artist, Album, Track
         
         logger = logging.getLogger("DBManager")
         
-        pending_ops = self.json_manager.get_pending_operations()
+        pending_ops = self.json_manager.get_all_operations()
         
         for op in pending_ops:
             try:

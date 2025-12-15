@@ -93,45 +93,36 @@ class RegisterView(APIView):
         
         if serializer.is_valid():
             try:
-                # Coordinar escritura distribuida del usuario
-                user_data = serializer.validated_data.copy()
+                # ✅ USAR EL SERIALIZER PARA CREAR EL USUARIO
+                user = serializer.save()  # Esto ejecuta RegisterSerializer.create()
                 
-                # Crear instancia de usuario sin guardar
-                user = User(**user_data)
-                user.id = str(uuid.uuid4())
+                logger.info(f"[REGISTER] Usuario creado por serializer: {user.username}")
+                logger.info(f"[REGISTER] Password después de create: {user.password[:80]}...")
                 
-                # Coordinar escritura distribuida
+                # Coordinar escritura distribuida (si es necesario)
                 result = self.leader_manager.write_metadata(user, "create")
                 
                 # Generar tokens JWT
-                user_instance = User.objects.get(id=user.id)
-                refresh = RefreshToken.for_user(user_instance)
-                
-                # Añadir versión de token
-                refresh['token_version'] = user_instance.refresh_token_version
-                
-                # Enviar email de verificación (simulado para proyecto universitario)
-                verification_token = user_instance.generate_verification_token()
-                logger.info(f"Token de verificación generado para {user_instance.username}")
+                refresh = RefreshToken.for_user(user)
+                refresh['token_version'] = user.refresh_token_version
                 
                 response_data = {
-                    'user': UserSerializer(user_instance).data,
+                    'user': UserSerializer(user).data,
                     'access': str(refresh.access_token),
                     'refresh': str(refresh),
-                    'message': 'Usuario registrado exitosamente. Por favor verifica tu email.'
+                    'message': 'Usuario registrado exitosamente.'
                 }
                 
                 return Response(response_data, status=status.HTTP_201_CREATED)
                 
             except Exception as e:
-                logger.error(f"Error en registro distribuido: {e}")
+                logger.error(f"Error en registro: {e}", exc_info=True)
                 return Response(
-                    {"error": "Error en el registro distribuido"},
+                    {"error": f"Error en el registro: {str(e)}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 @leader_only
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]

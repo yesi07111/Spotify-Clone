@@ -39,22 +39,22 @@ const secureStorage = {
     setItem(key, data) {
         const encrypted = encryptData(data)
         if (encrypted) {
-            sessionStorage.setItem(key, encrypted)
+            localStorage.setItem(key, encrypted)
         }
     },
     
     getItem(key) {
-        const encrypted = sessionStorage.getItem(key)
+        const encrypted = localStorage.getItem(key)
         return decryptData(encrypted)
     },
     
     removeItem(key) {
-        sessionStorage.removeItem(key)
+        localStorage.removeItem(key)
     },
     
     clear() {
-        sessionStorage.removeItem(TOKEN_KEY)
-        sessionStorage.removeItem(USER_KEY)
+        localStorage.removeItem(TOKEN_KEY)
+        localStorage.removeItem(USER_KEY)
     }
 }
 
@@ -67,6 +67,29 @@ const authClient = axios.create({
     },
     withCredentials: true, // Para cookies seguras
 })
+
+// En services/AuthService.js - Añade debugging
+authClient.interceptors.request.use(
+    (config) => {
+        const token = secureStorage.getItem(TOKEN_KEY)
+        console.log('[AUTH DEBUG] Token encontrado:', !!token)
+        console.log('[AUTH DEBUG] Token completo:', token)
+        
+        if (token && token.access) {
+            console.log('[AUTH DEBUG] Agregando Authorization header')
+            config.headers.Authorization = `Bearer ${token.access}`
+        } else {
+            console.log('[AUTH DEBUG] NO hay token disponible')
+        }
+        
+        console.log('[AUTH DEBUG] Headers finales:', config.headers)
+        return config
+    },
+    (error) => {
+        console.error('[AUTH DEBUG] Error en interceptor request:', error)
+        return Promise.reject(error)
+    }
+)
 
 // Interceptor para agregar token a las peticiones
 authClient.interceptors.request.use(
@@ -110,7 +133,6 @@ authClient.interceptors.response.use(
             } catch (refreshError) {
                 // Si el refresh token expiró, cerrar sesión
                 secureStorage.clear()
-                window.location.href = '/login'
                 return Promise.reject(refreshError)
             }
         }
@@ -124,11 +146,11 @@ export default {
     async register(userData) {
         try {
             // Hash de la contraseña en el cliente antes de enviar
-            const hashedPassword = CryptoJS.SHA256(userData.password).toString()
+            // const hashedPassword = CryptoJS.SHA256(userData.password).toString()
             
             const response = await authClient.post('/auth/register/', {
                 username: userData.username,
-                password: hashedPassword,
+                password: userData.password,
                 email: userData.email || ''
             })
             
@@ -145,24 +167,41 @@ export default {
     },
     
     // Login de usuario
+    // Login de usuario - Versión mejorada
     async login(credentials) {
         try {
-            // Hash de la contraseña en el cliente antes de enviar
-            const hashedPassword = CryptoJS.SHA256(credentials.password).toString()
+            console.log('[LOGIN DEBUG] Credenciales recibidas:', {
+                username: credentials.username,
+                passwordLength: credentials.password.length
+            })
             
             const response = await authClient.post('/auth/login/', {
                 username: credentials.username,
-                password: hashedPassword
+                password: credentials.password
             })
             
+            console.log('[LOGIN DEBUG] Respuesta del servidor:', response.data)
+            
             if (response.data.access) {
-                secureStorage.setItem(TOKEN_KEY, response.data)
+                // Guardar token COMPLETO (access y refresh)
+                const tokenData = {
+                    access: response.data.access,
+                    refresh: response.data.refresh,
+                    user: response.data.user
+                }
+                
+                console.log('[LOGIN DEBUG] Guardando token:', tokenData)
+                secureStorage.setItem(TOKEN_KEY, tokenData)
                 secureStorage.setItem(USER_KEY, response.data.user)
+                
+                // Verificar que se guardó
+                const savedToken = secureStorage.getItem(TOKEN_KEY)
+                console.log('[LOGIN DEBUG] Token guardado verificado:', savedToken)
             }
             
             return response.data
         } catch (error) {
-            console.error('Error en login:', error)
+            console.error('[LOGIN DEBUG] Error completo:', error.response || error)
             throw error
         }
     },

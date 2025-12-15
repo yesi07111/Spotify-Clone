@@ -13,11 +13,86 @@ from .utils import get_raft_server, get_raft_instance, next_term
 
 
 class Colors:
-    GREEN = "\033[92m"
-    BLUE = "\033[94m"
-    ORANGE = "\033[93m"
+    # Colores básicos
+    BLACK = "\033[30m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+    
+    # Colores brillantes (high intensity)
+    BRIGHT_BLACK = "\033[90m"
+    BRIGHT_RED = "\033[91m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_YELLOW = "\033[93m"
+    BRIGHT_BLUE = "\033[94m"
+    BRIGHT_MAGENTA = "\033[95m"
+    BRIGHT_CYAN = "\033[96m"
+    BRIGHT_WHITE = "\033[97m"
+    
+    # Colores de fondo
+    BG_BLACK = "\033[40m"
+    BG_RED = "\033[41m"
+    BG_GREEN = "\033[42m"
+    BG_YELLOW = "\033[43m"
+    BG_BLUE = "\033[44m"
+    BG_MAGENTA = "\033[45m"
+    BG_CYAN = "\033[46m"
+    BG_WHITE = "\033[47m"
+    
+    # Fondos brillantes
+    BG_BRIGHT_BLACK = "\033[100m"
+    BG_BRIGHT_RED = "\033[101m"
+    BG_BRIGHT_GREEN = "\033[102m"
+    BG_BRIGHT_YELLOW = "\033[103m"
+    BG_BRIGHT_BLUE = "\033[104m"
+    BG_BRIGHT_MAGENTA = "\033[105m"
+    BG_BRIGHT_CYAN = "\033[106m"
+    BG_BRIGHT_WHITE = "\033[107m"
+    
+    # Estilos de texto
     RESET = "\033[0m"
     BOLD = "\033[1m"
+    DIM = "\033[2m"
+    ITALIC = "\033[3m"
+    UNDERLINE = "\033[4m"
+    BLINK = "\033[5m"
+    REVERSE = "\033[7m"
+    HIDDEN = "\033[8m"
+    STRIKETHROUGH = "\033[9m"
+    
+    # Combinaciones útiles
+    @staticmethod
+    def success(text):
+        return f"{Colors.BRIGHT_GREEN}{Colors.BOLD}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def error(text):
+        return f"{Colors.BRIGHT_RED}{Colors.BOLD}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def warning(text):
+        return f"{Colors.BRIGHT_YELLOW}{Colors.BOLD}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def info(text):
+        return f"{Colors.BRIGHT_CYAN}{Colors.BOLD}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def header(text):
+        return f"{Colors.BRIGHT_MAGENTA}{Colors.BOLD}{Colors.UNDERLINE}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def debug(text):
+        return f"{Colors.DIM}{Colors.BRIGHT_BLACK}{text}{Colors.RESET}"
+    
+    @staticmethod
+    def highlight(text, bg_color=BG_BRIGHT_YELLOW, fg_color=BLACK):
+        return f"{bg_color}{fg_color}{text}{Colors.RESET}"
+
 
 # Logging básico
 logging.basicConfig(level=logging.INFO)
@@ -115,6 +190,9 @@ class LeaderManager:
             self._thread.join(timeout=5)
             logger.info("Thread detenido")
 
+    # ============================================================================
+    # HILO DE MONITOREO
+    # ============================================================================
     def _monitoring_loop(self):
         """
         Loop de monitorización:
@@ -133,39 +211,11 @@ class LeaderManager:
                 with self._nodes_lock:
                     self.nodes = {hash(ip): 0 for ip in current_nodes}
                 
-                logger.info(f"{Colors.BOLD}{Colors.ORANGE} Sending heartbeat on term {current_term} {Colors.RESET}")
                 
                 # Incrementar contador de ciclos
                 with self._monitoring_count_lock:
+                    logger.info(Colors.header(f"[LEADER ON {self.host} MONITORING LOOP {self._monitoring_cycle_count}]Sending heartbeat on term {current_term}"))
                     self._monitoring_cycle_count += 1
-                
-                # Solo hacer log detallado cada 5 ciclos
-                if self._monitoring_cycle_count % 1 == 0:
-                    # Formatear los hashes para mostrar solo primeros 3 dígitos
-                    formatted_nodes = []
-                    for node_hash, ip, port in current_nodes:
-                        hash_str = str(node_hash)
-                        if len(hash_str) > 3:
-                            formatted_hash = hash_str[:3] + ".."
-                        else:
-                            formatted_hash = hash_str
-                        formatted_nodes.append((formatted_hash, ip, port))
-
-                    # Calcular hash del nodo actual (igual que con los otros)
-                    current_hash = hash(self.host)
-                    current_hash_str = str(current_hash)
-                    current_formatted_hash = (
-                        current_hash_str[:3] + ".." if len(current_hash_str) > 3 else current_hash_str
-                    )
-
-                    current_node_info = (current_formatted_hash, self.host, self.port)
-
-                    # Log final
-                    logger.info(
-                        f"Term: {current_term}. "
-                        f"Nodo actual: {current_node_info}. "
-                        f"Nodos activos: {formatted_nodes}"
-                    )
                 
                 self._update_index()
 
@@ -175,8 +225,6 @@ class LeaderManager:
 
                 self._manage_db_nodes()
 
-                # TODO: FUTURA IMPLEMENTACION DE SSE
-                self._process_pending_tasks()
 
             except Exception as e:
                 logger.error(f"Error en _monitoring_loop: {e}")
@@ -188,6 +236,10 @@ class LeaderManager:
 
         logger.info("Monitoring loop finalizado.")
 
+
+    # ============================================================================
+    # AUXILIARES PARA DESCUBRIMIENTO
+    # ============================================================================
     def _get_client_nodes(self):
         """Obtiene la lista de nodos clientes activos (IPs)"""
         from .discovery import discover_active_clients
@@ -195,256 +247,6 @@ class LeaderManager:
         clients = [(hash(ip), ip, self.port) for ip in client_ips]
 
         return clients
-
-    def _manage_db_nodes(self):
-        """
-        Gestiona los nodos de base de datos para mantener exactamente k nodos
-        (líder + k-1 adicionales).
-        """
-        if self.raft.state != "leader":
-            return
-        
-        k = self.raft.db_replication_factor
-        with self.raft._lock:
-            current_db_nodes = self.raft.global_index["db_nodes"].copy()
-        active_nodes = [node_id for node_id, _, _ in self.raft_server._get_client_nodes() 
-                        if self.raft_server._is_node_active(node_id)]
-        
-        # logger.info(f"\n=== GESTION DE NODOS DB ===")
-        # logger.info(f"k requerido: {k}")
-        # logger.info(f"Nodos DB actuales: {current_db_nodes}")
-        # logger.info(f"Nodos activos totales: {active_nodes}")
-        
-        # Asegurar que el líder esté en db_nodes
-        if self.raft.node_id not in current_db_nodes:
-            with self.raft._lock:
-                current_db_nodes.add(self.raft.node_id)
-                logger.info(f"Líder {self.raft.node_id} agregado a db_nodes")
-        
-        # Contar nodos DB activos (excluyendo el líder)
-        active_db_nodes = [n for n in current_db_nodes 
-                        if n != self.raft.node_id and n in active_nodes]
-        
-        # logger.info(f"Nodos DB activos (sin líder): {active_db_nodes} (total: {len(active_db_nodes)})")
-        
-        # Si faltan nodos DB
-        if len(active_db_nodes) < k - 1 and len(active_nodes) >= k - 1:
-            needed = (k - 1) - len(active_db_nodes)
-            candidates = [n for n in active_nodes 
-                        if n not in current_db_nodes]
-            
-            logger.info(f"Faltan {needed} nodos DB. Candidatos: {candidates}")
-            
-            # Seleccionar candidatos de forma consistente (ordenar por ID)
-            candidates.sort()
-            new_db_nodes = candidates[:needed]
-            
-            logger.info(f"Nodos seleccionados para promoción: {new_db_nodes}")
-            
-            for node_id in new_db_nodes:
-                logger.info(f"Promoviendo nodo {node_id} a nodo DB...")
-                
-                current_db_nodes.add(node_id)
-                with self.raft._lock:
-                    if node_id not in self.raft.global_index["node_versions"]:
-                        self.raft.global_index["node_versions"][node_id] = {
-                            "read_version": 0,
-                            "write_version": 0,
-                            "db_version": 0,
-                            "db_version_prev": 0,
-                            "is_db_node": True
-                        }
-                    else:
-                        self.raft.global_index["node_versions"][node_id]["is_db_node"] = True
-                
-                # Sincronizar con el nodo DB que tiene mayor db_version
-                try:
-                    # Encontrar nodo DB con mayor db_version
-                    best_source_node = None
-                    max_db_version = -1
-                    
-                    for db_node in current_db_nodes:
-                        if db_node == node_id:  # No comparar consigo mismo
-                            continue
-                        
-                        node_version_info = self.raft.global_index["node_versions"].get(db_node, {})
-                        db_version = node_version_info.get("db_version", 0)
-                        
-                        if db_version > max_db_version:
-                            max_db_version = db_version
-                            best_source_node = db_node
-                    
-                    if best_source_node:
-                        logger.info(f"Sincronizando {node_id} desde {best_source_node} (db_version: {max_db_version})")
-                        
-                        # Obtener JSON del nodo fuente
-                        remote_db = RemoteDBManager()
-                        
-                        try:
-                            source_json = remote_db.get_json_dump(best_source_node)
-                            
-                            if source_json:
-                                logger.info(f"JSON obtenido de {best_source_node}, tamaño del log: {len(source_json.get('log', []))}")
-                                
-                                # Enviar JSON al nuevo nodo
-                                if node_id == self.raft_server.host:
-                                    # Nodo local
-                                    logger.info(f"Restaurando JSON localmente en {node_id}")
-                                    self.raft_server.db_instance.restore_json_from_dump(source_json)
-                                    self.raft_server.db_instance.execute_pending_operations_from_json()
-                                else:
-                                    # Nodo remoto - usar RemoteDBManager
-                                    logger.info(f"Restaurando JSON remotamente en {node_id}")
-                                    
-                                    # restore_json_from_dump necesita recibir json_data como parámetro
-                                    client = remote_db._get_client_server(node_id)
-                                    result = client.restore_json_from_dump(source_json)
-                                    
-                                    if result.get("success"):
-                                        logger.info(f"JSON restaurado en {node_id}, ejecutando operaciones pending...")
-                                        # Ejecutar operaciones pending del JSON
-                                        client.execute_pending_operations_from_json()
-                                        logger.info(f"Operaciones pending ejecutadas en {node_id}")
-                                    else:
-                                        logger.error(f"Error restaurando JSON en {node_id}: {result.get('error', 'Unknown')}")
-                                        raise Exception(f"Failed to restore JSON: {result.get('error')}")
-                                
-                                # Actualizar versiones del nuevo nodo
-                                with self.raft._lock:
-                                    self.raft.global_index["node_versions"][node_id]["db_version"] = max_db_version
-                                    self.raft.global_index["node_versions"][node_id]["db_version_prev"] = source_json.get("db_version_prev", 0)
-                                
-                                logger.info(f"Nodo {node_id} sincronizado exitosamente con db_version={max_db_version}")
-                            else:
-                                logger.warning(f"JSON vacío o None recibido de {best_source_node}")
-                        
-                        except Exception as e:
-                            logger.error(f"Error obteniendo o restaurando JSON de {best_source_node}: {e}")
-                            import traceback
-                            logger.error(traceback.format_exc())
-                
-                except Exception as e:
-                    logger.error(f"Error sincronizando nuevo nodo DB {node_id}: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                
-                logger.info(f"Nodo {node_id} promovido a nodo de base de datos")
-        
-        # Si sobran nodos DB
-        elif len(active_db_nodes) > k - 1:
-            excess = len(active_db_nodes) - (k - 1)
-            
-            logger.info(f"Sobran {excess} nodos DB")
-            
-            # Ordenar por db_version (menor primero) y eliminar el exceso
-            db_nodes_with_versions = []
-            for node_id in active_db_nodes:
-                version_info = self.raft.global_index["node_versions"].get(node_id, {})
-                db_version = version_info.get("db_version", 0)
-                db_nodes_with_versions.append((node_id, db_version))
-            
-            db_nodes_with_versions.sort(key=lambda x: x[1])  # Ordenar por db_version
-            nodes_to_remove = [node_id for node_id, _ in db_nodes_with_versions[:excess]]
-            
-            logger.info(f"Nodos a degradar: {nodes_to_remove}")
-            
-            for node_id in nodes_to_remove:
-                current_db_nodes.discard(node_id)
-                with self.raft._lock:
-                    if node_id in self.raft.global_index["node_versions"]:
-                        self.raft.global_index["node_versions"][node_id]["is_db_node"] = False
-                        self.raft.global_index["node_versions"][node_id]["db_version"] = 0
-                        self.raft.global_index["node_versions"][node_id]["db_version_prev"] = 0
-                
-                logger.info(f"Nodo {node_id} degradado de nodo de base de datos")
-        
-        else:
-            logger.info(f"Nodos DB correctos: {len(active_db_nodes) + 1} de {k}")
-
-            # --- Comprobación de sincronización de nodos DB ---
-            try:
-                # Obtener información de sincronización de todos los nodos DB
-                node_sync_info = {}
-                
-                for node_id in current_db_nodes:
-                    try:
-                        if node_id == self.raft.node_id:
-                            # Nodo líder local
-                            node_data = self.raft_server.db_instance.json_manager.read()
-                            db_version = node_data.get("db_version", 0)
-                            last_op = self.raft_server.db_instance.json_manager.get_last_operation()
-                        else:
-                            # Nodo DB remoto
-                            remote_db = RemoteDBManager()
-                            node_data = remote_db.get_json_dump(node_id)
-                            if node_data:
-                                db_version = node_data.get("db_version", 0)
-                                log = node_data.get("log", [])
-                                last_op = log[-1] if log else None
-                            else:
-                                logger.warning(f"No se pudo obtener JSON del nodo {node_id}")
-                                continue
-                        
-                        node_sync_info[node_id] = {
-                            "db_version": db_version,
-                            "last_operation": last_op,
-                            "json_data": node_data
-                        }
-                        
-                    except Exception as e:
-                        logger.error(f"Error obteniendo info de sincronización de {node_id}: {e}")
-                
-                # Verificar si todos tienen la misma db_version y última operación
-                if node_sync_info:
-                    # Obtener valores del líder
-                    leader_id = self.raft.node_id
-                    if leader_id in node_sync_info:
-                        leader_info = node_sync_info[leader_id]
-                        expected_db_version = leader_info["db_version"] if leader_info["db_version"] else -1
-                        expected_last_op = leader_info["last_operation"] if leader_info["last_operation"] else {"term": -1, "task_id": -1}
-                        
-                        term1 = expected_last_op["term"]
-                        task1 = expected_last_op["task_id"]
-                        logger.info(f"Líder {leader_id}: db_version={expected_db_version}, last_op_term={term1}, task_id={task1}")
-                        
-                        # Comparar con cada nodo DB
-                        for node_id, node_info in node_sync_info.items():
-                            if node_id == leader_id:
-                                continue
-                            
-                            node_db_version = node_info["db_version"] if node_info["db_version"] else -1
-                            node_last_op = node_info["last_operation"] if node_info["last_operation"] else {"term": -1, "task_id": -1}
-                            
-                            term2 = node_last_op["term"]
-                            task2 = node_last_op["task_id"]
-                            logger.info(f"Nodo {node_id}: db_version={node_db_version}, last_op_term={term2}, task_id={task2}")
-                            
-                            # Comparar db_version
-                            if (node_db_version != expected_db_version) or (expected_last_op.get("task_id") != node_last_op.get("task_id") or (node_last_op["term"] != expected_last_op["term"])) :
-                                
-                                logger.warning(f"Nodo {node_id} y lider: {leader_id} estan desincronizados. \ndb_version: {node_db_version} vs {expected_db_version} \ntask_id: {task1} vs {task2}")
-                                
-                                logger.info(f"Sincronizando nodo {node_id} con {leader_id}...")
-                                # self._sync_db_nodes(
-                                #         node_id,
-                                #         leader_id, 
-                                #         node_info["json_data"], 
-                                #         leader_info["json_data"]
-                                #     )
-            
-            except Exception as e:
-                logger.error(f"Error en comprobación de sincronización: {e}")
-                import traceback
-                traceback.print_exc()
-                
-        # Actualizar el índice global
-        with self.raft._lock:
-            self.raft.global_index["db_nodes"] = current_db_nodes
-            self.raft.global_index["version"] += 1
-        # logger.info(f"=== FIN GESTION DE NODOS DB ===\n")
-
-    # def _sync_db_nodes(node_id: str, node_id_2: str, node_info: dict, node_info_2: dict):
-       
 
     def _filter_active_nodes(self, node_ips: List[str]) -> Set[str]:
         filtered = {self.host}
@@ -466,8 +268,63 @@ class LeaderManager:
                 continue
         
         return filtered
+  
+
+    # ============================================================================
+    # ACTUALIZAR INDICE GLOBAL
+    # ============================================================================
+    def _update_index(self):
+        """
+        Reconstruye el índice global de archivos y metadatos.
+        Se ejecuta solo en el líder.
+        """
+        if self.raft.state != "leader":
+            return False
+        
+        from .discovery import discover_active_clients
+        
+        # Actualizar lista de archivos de cada nodo
+        nodes = discover_active_clients()
+        nodes = self._filter_active_nodes(nodes)
+        
+        if self.raft_server is None:
+            logging.warning("[Index] Es None el raft server en update index")
+        for node in nodes:
+            try:
+                if node == self.raft_server.node_id:
+                    # Archivos del nodo local
+                    files = self.raft_server.storage_instance.list_files()
+                else:
+                    # Archivos de nodo remoto
+                    remote = RemoteStorageManager()
+                    files = remote.list_files(node)
+                
+                with self.raft._lock:
+                    self.raft.global_index["files"][node] = files
+                    
+                    # Asegurar que el nodo tenga entrada en node_versions
+                    if node not in self.raft.global_index["node_versions"]:
+                        self.raft.global_index["node_versions"][node] = {
+                            "read_version": 0,
+                            "write_version": 0,
+                            "db_version": 0,
+                            "db_version_prev": 0,
+                            "is_db_node": node in self.raft.global_index["db_nodes"]
+                        }
+            except Exception as e:
+                logger.error(f"Error al obtener archivos del nodo {node}: {e}")
+                self.raft.global_index["files"][node] = []
+        
+        # Incrementar versión del índice
+        with self.raft._lock:
+            self.raft.global_index["version"] += 1
+        
+        return 
 
 
+    # ============================================================================
+    # DETECTAR ESTADO DE NODOS
+    # ============================================================================
     def _detect_node_state_changes(self):
         """Detecta cambios en el estado de los nodos"""
         from raft.discovery import discover_active_clients
@@ -481,7 +338,7 @@ class LeaderManager:
         
         # Leer si es primera vez (lock corto)
         with self.raft_server._lock:
-            is_first_time = not hasattr(self.raft_server, 'previous_active_nodes')
+            is_first_time = not hasattr(self.raft_server, 'previous_active_nodes') or len(self.raft_server.previous_active_nodes) == 0
         
         if is_first_time:
             # Primera vez - todos los nodos activos son ALIVE
@@ -497,16 +354,20 @@ class LeaderManager:
         
         # Leer estados actuales y previous_active_nodes (lock corto)
         with self.raft_server._lock:
-            node_states_copy = self.raft_server.node_states.copy()
             previous_active_copy = self.raft_server.previous_active_nodes.copy()
         
-        logger.info("Nodos y sus estados: ")
-        for node, state in node_states_copy.items():
-            logger.info(f"  {node}: {state}")
+        previous = " ,".join(previous_active_copy)
+        logger.info(f"Nodos previous: {previous}")
         
         # Detectar nodos que revivieron o son nuevos
         new_nodes = current_active - previous_active_copy
-        logging.info(new_nodes)
+        
+        string = ""
+        if new_nodes:
+            string = " ,".join(new_nodes)
+        else:
+            string = "No hay"
+        logger.info(f"Nodos nuevos o revividos: {string}")
         
         for node_ip in new_nodes:
             # Determinar si es RE-SPAWN o NEW (SIN LOCK - llamadas remotas)
@@ -520,7 +381,8 @@ class LeaderManager:
                     json_dump = remote_db.get_json_dump(node_ip)
                     if json_dump:
                         is_respawn = True
-                except:
+                        logger.info(f"Nodo {node_ip} tiene Json de DB, es RE-SPAWN")
+                except Exception:
                     pass
                 
                 # Check 2: Tiene shards?
@@ -530,7 +392,9 @@ class LeaderManager:
                     files = remote_storage.list_files(node_ip)
                     if files:
                         is_respawn = True
-            except:
+                        logger.info(f"Nodo {node_ip} tiene shards, es RE-SPAWN")
+
+            except Exception:
                 pass
             
             # Actualizar estado (lock corto)
@@ -542,11 +406,6 @@ class LeaderManager:
         
         # Detectar nodos que murieron
         dead_nodes = previous_active_copy - current_active
-        logger.info(
-            f"[NODE_STATE] Nodos activos anteriores: {' ,'.join(previous_active_copy)}, "
-            f"Nodos activos actuales: {' ,'.join(current_active)}, "
-            f"Muertos: {' ,'.join(dead_nodes)}"
-        )
         
         for node_ip in dead_nodes:
             # Leer y escribir estado (lock corto)
@@ -570,6 +429,18 @@ class LeaderManager:
         with self.raft_server._lock:
             self.raft_server.previous_active_nodes = set(self.raft_server.node_states.keys())
 
+        # logger.info(Colors.info("Nodos actuales y sus estados:"))
+        # for node, state in node_states_copy.items():
+        #     if state != "DEAD":
+        #         logger.info(Colors.info(f"\t{node}: {state}"))
+        #     else:
+        #         logger.info(Colors.warning(f"\t{node}: {state}"))
+
+
+    # ============================================================================
+    # PROCESAMIENTO DE NODOS NUEVOS Y REVIVIDOS
+    # ============================================================================
+    
     def _process_node_states(self):
         """Procesa nodos según su estado"""
         if self.raft.state != "leader":
@@ -593,10 +464,45 @@ class LeaderManager:
                     daemon=True
                 ).start()
 
+    def _process_new_node(self, node_ip: str):
+        """Procesa un nodo completamente nuevo"""
+        logger.info(f"Procesando nodo NEW: {node_ip}")
+        
+        try:
+            # PRIMERO: Restaurar factor de replicación antes de balancear
+            self._restore_replication_factor()
+            
+            # Obtener nodos vivos
+            from .discovery import discover_active_clients
+            nodes = discover_active_clients()
+            alive_nodes = self._filter_active_nodes(nodes)
+            
+            # # Agregar el nodo nuevo si no está en la lista
+            # if node_ip not in alive_nodes:
+            #     alive_nodes.append(node_ip)
+            
+            # SEGUNDO: Hacer balanceo solo si hay más de k nodos
+            if len(alive_nodes) > self.raft.db_replication_factor:
+                self._balance_shards(node_ip)
+            else:
+                logger.info(
+                    f"No se realiza balanceo: solo hay {len(alive_nodes)} nodos vivos "
+                    f"(se requieren más de {self.raft.db_replication_factor})"
+                )
+            
+            # Marcar como ALIVE
+            with self.raft_server._lock:
+                self.raft_server.node_states[node_ip] = "ALIVE"
+            
+            logger.info(f"Nodo NEW {node_ip} procesado y marcado como ALIVE")
+        
+        except Exception as e:
+            logger.error(f"Error procesando NEW {node_ip}: {e}")
+
     def _process_respawn_node(self, node_ip: str):
         """Procesa un nodo que revivió"""
         from raft.db_json_manager import DBJsonManager
-        from raft.leader_manager import RemoteDBManager, RemoteStorageManager
+        from raft.leader_manager import RemoteDBManager
 
         logger.info(f"Procesando nodo RE-SPAWN: {node_ip}")
         
@@ -633,7 +539,6 @@ class LeaderManager:
                         else:
                             # Degradar a no-DB
                             self._demote_db_node(node_ip)
-                            is_db_node = False
             except Exception as e:
                 logger.info(f"Error verificando BD en {node_ip}: {e}")
             
@@ -655,23 +560,10 @@ class LeaderManager:
         except Exception as e:
             logger.info(f"Error procesando RE-SPAWN {node_ip}: {e}")
 
-    def _process_new_node(self, node_ip: str):
-        """Procesa un nodo completamente nuevo"""
-        logger.info(f"Procesando nodo NEW: {node_ip}")
-        
-        try:
-            # Solo hacer balanceo
-            self._balance_shards(node_ip)
-            
-            # Marcar como ALIVE
-            with self.raft_server._lock:
-                self.raft_server.node_states[node_ip] = "ALIVE"
-            
-            logger.info(f"Nodo NEW {node_ip} procesado y marcado como ALIVE")
-        
-        except Exception as e:
-            logger.error(f"Error procesando NEW {node_ip}: {e}")
 
+    # ============================================================================
+    # HELPERS PARA PROCESAMIENTO DE NODOS REVIVIDOS
+    # ============================================================================
     def _sync_db_node(self, node_ip: str, remote_json: dict, leader_json: dict):
         """Sincroniza un nodo DB desactualizado enviando solo operaciones faltantes"""
         from raft.leader_manager import RemoteDBManager
@@ -910,254 +802,1052 @@ class LeaderManager:
         except Exception as e:
             logger.error(f"Error eliminando réplicas sobrantes: {e}")
 
-    def _balance_shards(self, target_node_ip: str):
-        """Balancea shards entre nodos copiando del más cargado al target"""
-        from raft.leader_manager import RemoteStorageManager
+
+    # ============================================================================
+    # BALANCEO DE CARGA
+    # ============================================================================
+
+    def _balance_shards(self, target_node: str):
+        """
+        Algoritmo mejorado de balanceo:
+        1. Nodo actual a balancear es el target
+        2. Lista negra vacía inicialmente
+        3. Mientras el target sea el de menor cantidad de chunks:
+        - Tomar nodo con más chunks
+        - De ese nodo, tomar shard de mayor rango que no esté en lista negra y que target no tenga
+        - Agregar a tareas: copiar a target y eliminar del origen
+        - Agregar shard a lista negra
+        - Recalcular en simulación o sea fingiendo que ya se ejecuto la decisión
+        4. Ejecutar tareas solo si copias son exitosas
+        """
+        
+        logger.info(f"Iniciando algoritmo mejorado de balanceo para nodo: {target_node}")
         
         try:
-            logger.info(f"Iniciando balanceo de shards hacia {target_node_ip}")
+            # Obtener nodos vivos
+            from .discovery import discover_active_clients
+            nodes = discover_active_clients()
+            alive_nodes = self._filter_active_nodes(nodes)
             
-            remote_storage = RemoteStorageManager()
+            # if target_node not in alive_nodes:
+            #     alive_nodes.append(target_node)
             
-            # Calcular total de chunks por nodo usando node_shards
-            node_shards_info = self.raft.global_index.get("node_shards", {})
+            # Crear copia del estado actual para simulación
+            with self.raft._lock:
+                # Copia profunda de los datos relevantes
+                files_metadata_copy = {
+                    filename: {
+                        "chunk_distribution": {
+                            range_key: nodes.copy()
+                            for range_key, nodes in file_info.get("chunk_distribution", {}).items()
+                        }
+                    }
+                    for filename, file_info in self.raft.global_index.get("files_metadata", {}).items()
+                }
+                
+                node_shards_copy = {
+                    node: {
+                        "total_chunks": info.get("total_chunks", 0),
+                        "shards": {
+                            filename: range_keys.copy()
+                            for filename, range_keys in info.get("shards", {}).items()
+                        }
+                    }
+                    for node, info in self.raft.global_index.get("node_shards", {}).items()
+                }
             
-            if not node_shards_info:
-                logger.info("No hay información de shards para balancear")
-                return
+            # Inicializar nodo si no existe en la copia
+            if target_node not in node_shards_copy:
+                node_shards_copy[target_node] = {
+                    "total_chunks": 0,
+                    "shards": {}
+                }
             
-            node_chunks = {
-                node_id: info.get("total_chunks", 0)
-                for node_id, info in node_shards_info.items()
-            }
+            # Lista negra: shards que ya hemos considerado
+            blacklisted_shards = set()
             
-            # Agregar target si no existe
-            if target_node_ip not in node_chunks:
-                node_chunks[target_node_ip] = 0
+            # Tareas de balanceo: lista de (shard_info, source_node)
+            balance_tasks = []
             
-            if len(node_chunks) < 2:
-                logger.info("No hay suficientes nodos para balancear")
-                return
-            
-            # Nodo con más chunks (excluyendo target)
-            max_node = max(
-                (nid for nid in node_chunks if nid != target_node_ip),
-                key=lambda n: node_chunks[n],
-                default=None
-            )
-            
-            if not max_node:
-                return
-            
-            max_chunks = node_chunks[max_node]
-            target_chunks = node_chunks[target_node_ip]
-            
-            # Si la diferencia no es significativa, no hacer nada
-            if max_chunks - target_chunks < 5:
-                logger.info(
-                    f"Diferencia de chunks no significativa: {max_chunks} vs {target_chunks}"
+            # Mientras target sea el nodo con menos chunks
+            while True:
+                # Calcular total de chunks por nodo 
+                node_totals = {}
+                for node in alive_nodes:
+                    if node in node_shards_copy:
+                        node_totals[node] = node_shards_copy[node]["total_chunks"]
+                    else:
+                        node_totals[node] = 0
+                
+                # Encontrar nodo con MÁS chunks (excluyendo target si es el máximo)
+                source_candidates = [n for n in node_totals]
+                if not source_candidates:
+                    break
+                    
+                max_node = max(source_candidates, key=lambda n: node_totals[n])
+                source_candidates_copy = source_candidates.copy()
+                source_candidates_copy.remove(max_node)
+                second_max_node = max(source_candidates_copy, key=lambda n: node_totals[n])
+
+                if max_node == target_node:
+                    break
+
+                max_chunks = node_totals[max_node]
+                second_max_chunks = node_totals[second_max_node]
+                target_chunks = node_totals[target_node]
+                
+                # Si target ya no es el que menos tiene, terminar
+                if target_chunks > min(node_totals.values()):
+                    logger.info(
+                        f"Target {target_node} ya no es el de menor carga "
+                        f"({target_chunks} vs mínimo {min(node_totals.values())})"
+                    )
+                    break
+                
+                logger.debug(
+                    f"Estado actual - Target: {target_node} ({target_chunks}), "
+                    f"Máximo: {max_node} ({max_chunks}), "
+                    f"2do Máximo: {second_max_node} ({second_max_chunks})"
+                    f"Mínimo: {min(node_totals.values())}"
                 )
-                return
-            
-            logger.info(
-                f"Balanceando desde {max_node} ({max_chunks} chunks) "
-                f"hacia {target_node_ip} ({target_chunks} chunks)"
-            )
-            
-            # Obtener shards del nodo con más chunks
-            max_node_shards = node_shards_info.get(max_node, {}).get("shards", {})
-            
-            if not max_node_shards:
-                logger.info(f"Nodo {max_node} no tiene shards")
-                return
-            
-            # Encontrar el shard más grande
-            largest_shard = None
-            largest_size = 0
-            largest_filename = None
-            
-            for filename, range_keys in max_node_shards.items():
-                for range_key in range_keys:
-                    range_start, range_end = map(int, range_key.split("-"))
-                    shard_size = range_end - range_start
-                    
-                    if shard_size > largest_size:
-                        largest_size = shard_size
-                        largest_shard = range_key
-                        largest_filename = filename
-            
-            if not largest_shard:
-                logger.info("No se encontró shard para copiar")
-                return
-            
-            logger.info(
-                f"Copiando shard {largest_shard} de {largest_filename} "
-                f"({largest_size} chunks) desde {max_node} a {target_node_ip}"
-            )
-            
-            # Copiar el shard
-            try:
-                # 1. Leer el shard del nodo origen
-                range_data = remote_storage.get_chunk_range(largest_filename, largest_shard, max_node)
                 
-                # 2. Escribir en el nodo destino
-                remote_storage.create_file_range(largest_filename, range_data, largest_shard, target_node_ip)
+                # Buscar shard en max_node para mover a target
+                shard_info = None
                 
-                # 3. Actualizar el índice global
-                with self.raft._lock:
-                    files_metadata = self.raft.global_index.get("files_metadata", {})
+                # Obtener shards del nodo máximo
+                max_node_shards = node_shards_copy.get(max_node, {}).get("shards", {})
+                second_max_node_shards = node_shards_copy.get(second_max_node, {}).get("shards", {})
+                
+                # Buscar el shard de mayor tamaño que no esté en lista negra
+                # y que target no tenga
+                candidate_shards = self._get_candidates_for_max_node(target_node = target_node, max_node_shards=max_node_shards, node_shards_copy=node_shards_copy, files_metadata_copy=files_metadata_copy, blacklisted_shards=blacklisted_shards)
+                
+                # Si no hay candidatos, reintentar con el next max
+                if not candidate_shards:
+                    logger.info(f"No hay shards candidatos para mover desde {max_node}. Reintentando con {second_max_node}")
                     
-                    if largest_filename in files_metadata:
-                        distribution = files_metadata[largest_filename].get("chunk_distribution", {})
+                    source_candidates = self._get_candidates_for_max_node(target_node = target_node, max_node_shards=second_max_node_shards, node_shards_copy=node_shards_copy, files_metadata_copy=files_metadata_copy, blacklisted_shards=blacklisted_shards)
+
+                    if not candidate_shards:
+                        logger.info(f"No hay shards candidatos para mover desde {second_max_node}. Terminando.")
+                        break
+                
+                # Ordenar por tamaño (mayor primero)
+                candidate_shards.sort(key=lambda x: x["size"], reverse=True)
+                
+                # Tomar el shard de mayor tamaño
+                selected_shard = candidate_shards[0]
+                shard_info = {
+                    "filename": selected_shard["filename"],
+                    "range_key": selected_shard["range_key"],
+                    "size": selected_shard["size"],
+                    "shard_id": selected_shard["shard_id"]
+                }
+                
+                # Verificar que al mover no se pierda replicación
+                file_meta = files_metadata_copy.get(shard_info["filename"], {})
+                distribution = file_meta.get("chunk_distribution", {})
+                current_replicas = distribution.get(shard_info["range_key"], [])
+                
+                # if len(current_replicas) <= self.raft.db_replication_factor:
+                #     logger.warning(
+                #         f"Shard {shard_info['shard_id']} tiene solo {len(current_replicas)} réplicas, "
+                #         f"no se puede mover (mínimo {self.raft.db_replication_factor + 1})"
+                #     )
+                #     # Agregar a lista negra y continuar
+                #     blacklisted_shards.add(shard_info["shard_id"])
+                #     continue
+                
+                # AGREGAR TAREA DE BALANCEO
+                balance_tasks.append({
+                    "action": "copy",
+                    "source_node": max_node,
+                    "target_node": target_node,
+                    "filename": shard_info["filename"],
+                    "range_key": shard_info["range_key"],
+                    "size": shard_info["size"],
+                    "shard_id": shard_info["shard_id"]
+                })
+                
+                # AGREGAR TAREA DE ELIMINACIÓN (condicional)
+                balance_tasks.append({
+                    "action": "delete",
+                    "node": max_node,
+                    "filename": shard_info["filename"],
+                    "range_key": shard_info["range_key"],
+                    "size": shard_info["size"],
+                    "shard_id": shard_info["shard_id"],
+                    "depends_on": len(balance_tasks) - 1  # Depende de la copia anterior
+                })
+                
+                # Agregar a lista negra
+                blacklisted_shards.add(shard_info["shard_id"])
+                
+                # ACTUALIZAR COPIAS
+                # 1. Agregar shard a target en simulación
+                if shard_info["filename"] not in node_shards_copy[target_node]["shards"]:
+                    node_shards_copy[target_node]["shards"][shard_info["filename"]] = []
+                
+                if shard_info["range_key"] not in node_shards_copy[target_node]["shards"][shard_info["filename"]]:
+                    node_shards_copy[target_node]["shards"][shard_info["filename"]].append(shard_info["range_key"])
+                    node_shards_copy[target_node]["total_chunks"] += shard_info["size"]
+                
+                # 2. Actualizar files_metadata 
+                if shard_info["filename"] not in files_metadata_copy:
+                    files_metadata_copy[shard_info["filename"]] = {"chunk_distribution": {}}
+                
+                if shard_info["range_key"] not in files_metadata_copy[shard_info["filename"]]["chunk_distribution"]:
+                    files_metadata_copy[shard_info["filename"]]["chunk_distribution"][shard_info["range_key"]] = []
+                
+                if target_node not in files_metadata_copy[shard_info["filename"]]["chunk_distribution"][shard_info["range_key"]]:
+                    files_metadata_copy[shard_info["filename"]]["chunk_distribution"][shard_info["range_key"]].append(target_node)
+                
+                # 3. Eliminar shard de source en copia (solo de node_shards, no de metadata)
+                if shard_info["range_key"] in node_shards_copy[max_node]["shards"].get(shard_info["filename"], []):
+                    node_shards_copy[max_node]["shards"][shard_info["filename"]].remove(shard_info["range_key"])
+                    node_shards_copy[max_node]["total_chunks"] -= shard_info["size"]
+                    
+                    # Limpiar estructura si queda vacía
+                    if not node_shards_copy[max_node]["shards"][shard_info["filename"]]:
+                        del node_shards_copy[max_node]["shards"][shard_info["filename"]]
+                
+                logger.debug(
+                    f"Shard {shard_info['shard_id']} ({shard_info['size']} chunks) "
+                    f"programado para mover de {max_node} a {target_node}"
+                )
+            
+            # EJECUTAR TAREAS DE BALANCEO
+            if balance_tasks:
+                info = len([t for t in balance_tasks if t['action'] == 'copy'])
+                logger.info(f"Ejecutando {info} tareas de balanceo")
+                self._execute_balance_tasks(balance_tasks, target_node)
+            else:
+                logger.info("No se generaron tareas de balanceo")
+            
+            # Limpiar réplicas excedentes si es necesario
+            # self._cleanup_excess_replicas()
+            
+        except Exception as e:
+            logger.error(f"Error en algoritmo mejorado de balanceo: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_candidates_for_max_node(self, target_node: str, max_node_shards: dict, node_shards_copy:dict, files_metadata_copy: dict, blacklisted_shards: list):
+        candidate_shards = []
+        for filename, range_keys in max_node_shards.items():
+                    for range_key in range_keys:
+                        # Verificar si está en lista negra
+                        shard_id = f"{filename}:{range_key}"
+                        if shard_id in blacklisted_shards:
+                            continue
                         
-                        if largest_shard in distribution:
-                            if target_node_ip not in distribution[largest_shard]:
-                                distribution[largest_shard].append(target_node_ip)
+                        # Verificar si target ya tiene este shard
+                        target_has_shard = False
+                        if target_node in node_shards_copy:
+                            target_shards = node_shards_copy[target_node].get("shards", {})
+                            if filename in target_shards and range_key in target_shards[filename]:
+                                target_has_shard = True
+                        
+                        # Verificar en files_metadata también
+                        file_meta = files_metadata_copy.get(filename, {})
+                        distribution = file_meta.get("chunk_distribution", {})
+                        if range_key in distribution and target_node in distribution[range_key]:
+                            target_has_shard = True
+                        
+                        if not target_has_shard:
+                            # Calcular tamaño del shard
+                            range_start, range_end = map(int, range_key.split("-"))
+                            shard_size = range_end - range_start
+                            
+                            candidate_shards.append({
+                                "filename": filename,
+                                "range_key": range_key,
+                                "size": shard_size,
+                                "shard_id": shard_id
+                            })
+        return candidate_shards
+
+    def _execute_balance_tasks(self, balance_tasks: list, target_node: str):
+        """
+        Ejecuta las tareas de balanceo en orden.
+        Solo elimina shards del origen si la copia fue exitosa.
+        """
+        from raft.leader_manager import RemoteStorageManager
+        
+        remote_storage = RemoteStorageManager()
+        executed_copies = {}  # shard_id -> éxito
+        
+        # Primera fase: Ejecutar todas las copias
+        for task in balance_tasks:
+            if task["action"] == "copy":
+                
+                try:
+                    logger.info(
+                        f"Copiando shard {task['shard_id']} ({task['size']} chunks) "
+                        f"desde {task['source_node']} a {task['target_node']}"
+                    )
+                        
+                    # Actualizar índices globales
+                    with self.raft._lock:
+                        global_index_copy = self.raft.global_index.copy()
+                        logger.info("Se copio el indice global para tareas de balance (COPIA)")
+
+                    # Leer del nodo origen
+                    range_data = remote_storage.get_chunk_range(
+                        task["filename"], task["range_key"], task["source_node"]
+                    )
                     
-                    # 4. Actualizar node_shards para target
-                    if target_node_ip not in node_shards_info:
-                        node_shards_info[target_node_ip] = {
+                    # Escribir en nodo destino
+                    remote_storage.create_file_range(
+                        task["filename"], range_data, task["range_key"], task["target_node"]
+                    )
+
+                    # Actualizar files_metadata
+                    files_metadata = global_index_copy.get("files_metadata", {})
+                    if task["filename"] in files_metadata:
+                        distribution = files_metadata[task["filename"]].get("chunk_distribution", {})
+                        if task["range_key"] in distribution:
+                            if task["target_node"] not in distribution[task["range_key"]]:
+                                distribution[task["range_key"]].append(task["target_node"])
+                    
+                    # Actualizar node_shards para target
+                    node_shards_info = global_index_copy.get("node_shards", {})
+                    if task["target_node"] not in node_shards_info:
+                        node_shards_info[task["target_node"]] = {
                             "total_chunks": 0,
                             "shards": {}
                         }
                     
-                    if largest_filename not in node_shards_info[target_node_ip]["shards"]:
-                        node_shards_info[target_node_ip]["shards"][largest_filename] = []
+                    if task["filename"] not in node_shards_info[task["target_node"]]["shards"]:
+                        node_shards_info[task["target_node"]]["shards"][task["filename"]] = []
                     
-                    if largest_shard not in node_shards_info[target_node_ip]["shards"][largest_filename]:
-                        node_shards_info[target_node_ip]["shards"][largest_filename].append(largest_shard)
-                        node_shards_info[target_node_ip]["total_chunks"] += largest_size
+                    if task["range_key"] not in node_shards_info[task["target_node"]]["shards"][task["filename"]]:
+                        node_shards_info[task["target_node"]]["shards"][task["filename"]].append(task["range_key"])
+                        node_shards_info[task["target_node"]]["total_chunks"] += task["size"]
                     
-                    # 5. Actualizar files
-                    if target_node_ip not in self.raft.global_index["files"]:
-                        self.raft.global_index["files"][target_node_ip] = []
+                    # Actualizar files
+                    if task["target_node"] not in global_index_copy["files"]:
+                        global_index_copy["files"][task["target_node"]] = []
                     
-                    if largest_filename not in self.raft.global_index["files"][target_node_ip]:
-                        self.raft.global_index["files"][target_node_ip].append(largest_filename)
+                    if task["filename"] not in global_index_copy["files"][task["target_node"]]:
+                        global_index_copy["files"][task["target_node"]].append(task["filename"])
                 
-                logger.info(
-                    f"Shard {largest_shard} copiado exitosamente a {target_node_ip}"
-                )
-                
-                # 6. Si ahora hay más de k=3 réplicas, eliminar del nodo origen
-                distribution = files_metadata.get(largest_filename, {}).get("chunk_distribution", {})
-                nodes_with_shard = distribution.get(largest_shard, [])
-                
-                if len(nodes_with_shard) > self.raft.db_replication_factor:
-                    logger.info(f"Eliminando shard {largest_shard} de {max_node} (réplicas excedidas)")
+                    executed_copies[task["shard_id"]] = True
+                    logger.info(f"Copia exitosa de shard {task['shard_id']}")
+
+                    with self.raft._lock:
+                        self.raft.global_index = global_index_copy
+                        logger.info("Se actualizo el indice global con las tareas de balanceo (COPIA)")
                     
-                    deleted = remote_storage.delete_file_range(largest_filename, largest_shard, max_node)
-                    
-                    if deleted:
-                        # Actualizar índice
-                        with self.raft._lock:
-                            nodes_with_shard.remove(max_node)
+                except Exception as e:
+                    logger.error(f"Error copiando shard {task['shard_id']}: {e}")
+                    executed_copies[task["shard_id"]] = False
+        
+        # Segunda fase: Eliminar shards del origen solo si la copia fue exitosa
+        for task in balance_tasks:
+            if task["action"] == "delete":
+                shard_id = task["shard_id"]
+                
+                # Verificar si la copia correspondiente fue exitosa
+                copy_task_id = task.get("depends_on")
+                if copy_task_id is not None and 0 <= copy_task_id < len(balance_tasks):
+                    copy_task = balance_tasks[copy_task_id]
+                    if executed_copies.get(copy_task["shard_id"], False):
+                        try:
+                            # Verificar que todavía hay suficientes réplicas
+                            with self.raft._lock:
+                                global_index_copy = self.raft.global_index.copy()
+                                logger.info("Se copio el indice global para tareas de balance (ELIMINAR)")
+                                
+                            files_metadata = global_index_copy.get("files_metadata", {})
+                            distribution = files_metadata.get(task["filename"], {}).get("chunk_distribution", {})
+                            current_replicas = distribution.get(task["range_key"], [])
                             
-                            # Actualizar node_shards
-                            if max_node in node_shards_info:
-                                if largest_filename in node_shards_info[max_node]["shards"]:
-                                    if largest_shard in node_shards_info[max_node]["shards"][largest_filename]:
-                                        node_shards_info[max_node]["shards"][largest_filename].remove(largest_shard)
-                                        node_shards_info[max_node]["total_chunks"] -= largest_size
-                                        
-                                        # Si no quedan más shards de este archivo, eliminarlo
-                                        if not node_shards_info[max_node]["shards"][largest_filename]:
-                                            del node_shards_info[max_node]["shards"][largest_filename]
+                            if len(current_replicas) > self.raft.db_replication_factor:
+                                logger.info(
+                                    f"Eliminando shard {shard_id} de {task['node']} "
+                                    f"(réplicas: {len(current_replicas)})"
+                                )
+                                
+                                # Eliminar físicamente
+                                deleted = remote_storage.delete_file_range(
+                                    task["filename"], task["range_key"], task["node"]
+                                )
+                                
+                                if deleted:
+                                    # Actualizar índices
+                                    node_shards_info = global_index_copy.get("node_shards", {})
+                                    
+                                    if task["node"] in node_shards_info:
+                                        if task["filename"] in node_shards_info[task["node"]]["shards"]:
+                                            if task["range_key"] in node_shards_info[task["node"]]["shards"][task["filename"]]:
+                                                node_shards_info[task["node"]]["shards"][task["filename"]].remove(task["range_key"])
+                                                node_shards_info[task["node"]]["total_chunks"] -= task["size"]
+                                                
+                                                # Limpiar estructura si queda vacía
+                                                if not node_shards_info[task["node"]]["shards"][task["filename"]]:
+                                                    del node_shards_info[task["node"]]["shards"][task["filename"]]
+                                    
+                                    logger.info(f"Eliminación exitosa de shard {shard_id}")
+
+                                    with self.raft._lock:
+                                        self.raft.global_index = global_index_copy
+                                        logger.info("Se actualizo el indice global con las tareas de balanceo (COPIA)")
+                                else:
+                                    logger.warning(f"No se pudo eliminar shard {shard_id}")
+                            else:
+                                logger.warning(
+                                    f"No se elimina shard {shard_id}: "
+                                    f"solo hay {len(current_replicas)} réplicas"
+                                )
+                            
+                        except Exception as e:
+                            logger.error(f"Error eliminando shard {shard_id}: {e}")
+                    else:
+                        logger.warning(
+                            f"No se elimina shard {shard_id}: "
+                            f"la copia no fue exitosa"
+                        )
+                       
+    def _restore_replication_factor(self):
+        """
+        Restaura el factor de replicación para cada shard.
+        Cada shard debe estar en al menos k nodos (o menos si no hay suficientes nodos).
+        """
+        k = self.raft.db_replication_factor
+        logger.info(f"Restaurando factor de replicación (k={k})")
+        
+        try:
+            with self.raft._lock:
+                files_metadata = self.raft.global_index.get("files_metadata", {})
+                node_shards_info = self.raft.global_index.get("node_shards", {})
+                
+            if not files_metadata:
+                logger.info("No hay archivos para verificar replicación")
+                return
+            
+            # Obtener todos los nodos disponibles (vivos)
+            from .discovery import discover_active_clients
+            nodes = discover_active_clients()
+            alive_nodes = self._filter_active_nodes(nodes)
+            
+            actual_k = min(k, len(alive_nodes))
+            if actual_k < k:
+                logger.warning(f"Solo hay {len(alive_nodes)} nodos vivos, replicando en {actual_k}")
+            
+            replication_changes = []
+            
+            # Para cada archivo y cada shard
+            for filename, file_info in files_metadata.items():
+                distribution = file_info.get("chunk_distribution", {})
+                
+                for range_key, nodes_with_shard in distribution.items():
+                    # nodes_info = " ,".join(nodes_with_shard)
+                    # logger.info(f"Nodos con el shard {range_key} de {filename} son {len(nodes_with_shard)}: {nodes_info}")
+                    current_nodes = set(nodes_with_shard)
+                    
+                    # Verificar si hay nodos vivos que no tengan el shard
+                    missing_replicas = actual_k - len(current_nodes)
+                    
+                    if missing_replicas > 0:
+                        # Encontrar nodos vivos que no tengan el shard
+                        available_nodes = [
+                            node for node in alive_nodes 
+                            if node not in current_nodes
+                        ]
+                        # logger.info("Faltan replicas")
                         
-                        logger.info(f"Shard eliminado de {max_node}")
+                        if available_nodes:
+                            # logger.info("Hay nodos disponibles")
+                            # Ordenar por menor cantidad de chunks
+                            available_nodes.sort(key=lambda n: node_shards_info.get(n, {}).get("total_chunks", 0))
+                            
+                            # Seleccionar los primeros N nodos disponibles
+                            nodes_to_add = available_nodes[:missing_replicas]
+                            
+                            for new_node in nodes_to_add:
+                                replication_changes.append({
+                                    "filename": filename,
+                                    "range_key": range_key,
+                                    "source_node": list(current_nodes)[0],  # Tomar de cualquier nodo que ya lo tenga
+                                    "dest_node": new_node
+                                })
             
-            except Exception as e:
-                logger.error(f"Error copiando shard: {e}")
-                import traceback
-                traceback.print_exc()
-            
-            # Marcar como ALIVE una vez completado
-            with self.raft_server._lock:
-                if self.raft_server.node_states.get(target_node_ip) in ["RE-SPAWN", "NEW"]:
-                    self.raft_server.node_states[target_node_ip] = "ALIVE"
-                    logger.info(f"Nodo {target_node_ip} marcado como ALIVE tras balanceo")
+            # Si hay cambios, replicar los shards
+            if replication_changes:
+                logger.info(f"Replicando {len(replication_changes)} shards para restaurar factor k={k}")
+                self._execute_replication_changes(replication_changes)
+            else:
+                logger.info("Factor de replicación ya está satisfecho")
         
         except Exception as e:
-            logger.info(f"Error balanceando shards: {e}")
+            logger.error(f"Error restaurando factor de replicación: {e}")
             import traceback
             traceback.print_exc()
 
-    def _update_index(self):
-        """
-        Reconstruye el índice global de archivos y metadatos.
-        Se ejecuta solo en el líder.
-        """
-        if self.raft.state != "leader":
-            return False
+    def _execute_replication_changes(self, replication_changes):
+        """Ejecuta la replicación de shards entre nodos"""
+        from raft.leader_manager import RemoteStorageManager
         
-        from .discovery import discover_active_clients
+        remote_storage = RemoteStorageManager()
         
-        # Actualizar lista de archivos de cada nodo
-        nodes = discover_active_clients()
-        nodes_str = " ,".join(nodes)
-        logger.info(f"[Index] Nodos activos descubiertos {nodes_str}")
-        if self.raft_server is None:
-            logging.warning("[Index] Es None el raf server en update index")
-        for node in nodes:
+        for change in replication_changes:
             try:
-                if node == self.raft_server.node_id:
-                    # Archivos del nodo local
-                    files = self.raft_server.storage_instance.list_files()
-                else:
-                    # Archivos de nodo remoto
-                    remote = RemoteStorageManager()
-                    files = remote.list_files(node)
+                logger.info(
+                    f"Replicando shard {change['range_key']} de {change['filename']} "
+                    f"desde {change['source_node']} a {change['dest_node']}"
+                )
                 
+                # Leer el shard del nodo origen
+                range_start, range_end = map(int, change['range_key'].split("-"))
+                shard_size = range_end - range_start
+                
+                import json
+                chang = json.dumps(change)
+                logger.info(f"Change actual: {chang}")
+                range_data = remote_storage.get_chunk_range(
+                    change['filename'], change['range_key'], change['source_node']
+                )
+                
+                # rang = json.dumps(range_data)
+                # logger.info(f"Range data: {rang}")
+
+                # Escribir en el nodo destino
+                remote_storage.create_file_range(
+                    change['filename'], range_data, change['range_key'], change['dest_node']
+                )
+                
+                # Actualizar índices
+
+                # Actualizar files_metadata
                 with self.raft._lock:
-                    self.raft.global_index["files"][node] = files
+                    global_index_copy = self.raft.global_index.copy()
+                    logger.info("Se copio el indice global para tareas de replicacion")
+
                     
-                    # Asegurar que el nodo tenga entrada en node_versions
-                    if node not in self.raft.global_index["node_versions"]:
-                        self.raft.global_index["node_versions"][node] = {
+                files_metadata = global_index_copy.get("files_metadata", {})
+                if change['filename'] in files_metadata:
+                    distribution = files_metadata[change['filename']].get("chunk_distribution", {})
+                    if change['range_key'] in distribution:
+                        if change['dest_node'] not in distribution[change['range_key']]:
+                            distribution[change['range_key']].append(change['dest_node'])
+                
+                # Actualizar node_shards para destino
+                node_shards_info = global_index_copy.get("node_shards", {})
+                if change['dest_node'] not in node_shards_info:
+                    node_shards_info[change['dest_node']] = {
+                        "total_chunks": 0,
+                        "shards": {}
+                    }
+                
+                if change['filename'] not in node_shards_info[change['dest_node']]["shards"]:
+                    node_shards_info[change['dest_node']]["shards"][change['filename']] = []
+                
+                if change['range_key'] not in node_shards_info[change['dest_node']]["shards"][change['filename']]:
+                    node_shards_info[change['dest_node']]["shards"][change['filename']].append(change['range_key'])
+                    node_shards_info[change['dest_node']]["total_chunks"] += shard_size
+                
+                # Actualizar files
+                if change['dest_node'] not in global_index_copy["files"]:
+                    global_index_copy["files"][change['dest_node']] = []
+                
+                if change['filename'] not in global_index_copy["files"][change['dest_node']]:
+                    global_index_copy["files"][change['dest_node']].append(change['filename'])
+
+                with self.raft._lock:
+                    self.raft.global_index = global_index_copy
+                    logger.info("Se actualizo el indice global con las tareas de replicacion exitosa")
+                
+                logger.info(f"Shard replicado exitosamente a {change['dest_node']}")
+                
+            except Exception as e:
+                logger.error(f"Error replicando shard: {e}")
+
+    def _cleanup_excess_replicas(self):
+        """Elimina réplicas excedentes después del balanceo"""
+        from raft.leader_manager import RemoteStorageManager
+        
+        try:
+            remote_storage = RemoteStorageManager()
+            
+            with self.raft._lock:
+                files_metadata = self.raft.global_index.get("files_metadata", {})
+                node_shards_info = self.raft.global_index.get("node_shards", {})
+                
+                for filename, file_info in files_metadata.items():
+                    distribution = file_info.get("chunk_distribution", {})
+                    
+                    for range_key, nodes in distribution.items():
+                        if len(nodes) > self.raft.db_replication_factor:
+                            # Ordenar nodos por cantidad de chunks (los que más tienen primero)
+                            nodes_by_load = sorted(
+                                nodes,
+                                key=lambda n: node_shards_info.get(n, {}).get("total_chunks", 0),
+                                reverse=True
+                            )
+                            
+                            # Eliminar de los nodos más cargados
+                            excess_count = len(nodes) - self.raft.db_replication_factor
+                            nodes_to_remove = nodes_by_load[:excess_count]
+                            
+                            for node in nodes_to_remove:
+                                logger.info(f"Eliminando réplica excedente de {range_key} de {node}")
+                                
+                                # Eliminar físicamente
+                                remote_storage.delete_file_range(filename, range_key, node)
+                                
+                                # Actualizar índices
+                                if node in node_shards_info:
+                                    if filename in node_shards_info[node]["shards"]:
+                                        if range_key in node_shards_info[node]["shards"][filename]:
+                                            node_shards_info[node]["shards"][filename].remove(range_key)
+                                            node_shards_info[node]["total_chunks"] -= (
+                                                int(range_key.split("-")[1]) - int(range_key.split("-")[0])
+                                            )
+                                            
+                                            if not node_shards_info[node]["shards"][filename]:
+                                                del node_shards_info[node]["shards"][filename]
+                                
+                                # Eliminar de distribution
+                                if node in distribution[range_key]:
+                                    distribution[range_key].remove(node)
+        
+        except Exception as e:
+            logger.error(f"Error limpiando réplicas excedentes: {e}")
+
+    # def _balance_shards(self, target_node_ip: str):
+    #     """Balancea shards entre nodos copiando del más cargado al target"""
+    #     from raft.leader_manager import RemoteStorageManager
+        
+    #     try:
+    #         logger.info(f"Iniciando balanceo de shards hacia {target_node_ip}")
+            
+    #         remote_storage = RemoteStorageManager()
+            
+    #         import json
+    #         info_log = json.dumps(self.raft.global_index.get("node_shards", {}))
+    #         logger.info(f"Informacion en global index sobre shards: {info_log}")
+            
+    #         # Calcular total de chunks por nodo usando node_shards
+    #         node_shards_info = self.raft.global_index.get("node_shards", {})
+            
+    #         if not node_shards_info:
+    #             logger.info("No hay información de shards para balancear")
+    #             return
+            
+    #         node_chunks = {
+    #             node_id: info.get("total_chunks", 0)
+    #             for node_id, info in node_shards_info.items()
+    #         }
+            
+    #         # Agregar target si no existe
+    #         if target_node_ip not in node_chunks:
+    #             node_chunks[target_node_ip] = 0
+            
+    #         if len(node_chunks) < 2:
+    #             logger.info("No hay suficientes nodos para balancear")
+    #             return
+            
+    #         # Nodo con más chunks (excluyendo target)
+    #         max_node = max(
+    #             (nid for nid in node_chunks if nid != target_node_ip),
+    #             key=lambda n: node_chunks[n],
+    #             default=None
+    #         )
+            
+    #         if not max_node:
+    #             return
+            
+    #         max_chunks = node_chunks[max_node]
+    #         target_chunks = node_chunks[target_node_ip]
+            
+    #         # Si la diferencia no es significativa, no hacer nada
+    #         if max_chunks - target_chunks < 5:
+    #             logger.info(
+    #                 f"Diferencia de chunks no significativa: {max_chunks} vs {target_chunks}"
+    #             )
+    #             return
+            
+    #         logger.info(
+    #             f"Balanceando desde {max_node} ({max_chunks} chunks) "
+    #             f"hacia {target_node_ip} ({target_chunks} chunks)"
+    #         )
+            
+    #         # Obtener shards del nodo con más chunks
+    #         max_node_shards = node_shards_info.get(max_node, {}).get("shards", {})
+            
+    #         if not max_node_shards:
+    #             logger.info(f"Nodo {max_node} no tiene shards")
+    #             return
+            
+    #         # Encontrar el shard más grande
+    #         largest_shard = None
+    #         largest_size = 0
+    #         largest_filename = None
+            
+    #         for filename, range_keys in max_node_shards.items():
+    #             for range_key in range_keys:
+    #                 range_start, range_end = map(int, range_key.split("-"))
+    #                 shard_size = range_end - range_start
+                    
+    #                 if shard_size > largest_size:
+    #                     largest_size = shard_size
+    #                     largest_shard = range_key
+    #                     largest_filename = filename
+            
+    #         if not largest_shard:
+    #             logger.info("No se encontró shard para copiar")
+    #             return
+            
+    #         logger.info(
+    #             f"Copiando shard {largest_shard} de {largest_filename} "
+    #             f"({largest_size} chunks) desde {max_node} a {target_node_ip}"
+    #         )
+            
+    #         # Copiar el shard
+    #         try:
+    #             # 1. Leer el shard del nodo origen
+    #             range_data = remote_storage.get_chunk_range(largest_filename, largest_shard, max_node)
+                
+    #             # 2. Escribir en el nodo destino
+    #             remote_storage.create_file_range(largest_filename, range_data, largest_shard, target_node_ip)
+                
+    #             # 3. Actualizar el índice global
+    #             with self.raft._lock:
+    #                 files_metadata = self.raft.global_index.get("files_metadata", {})
+                    
+    #                 if largest_filename in files_metadata:
+    #                     distribution = files_metadata[largest_filename].get("chunk_distribution", {})
+                        
+    #                     if largest_shard in distribution:
+    #                         if target_node_ip not in distribution[largest_shard]:
+    #                             distribution[largest_shard].append(target_node_ip)
+                    
+    #                 # 4. Actualizar node_shards para target
+    #                 if target_node_ip not in node_shards_info:
+    #                     node_shards_info[target_node_ip] = {
+    #                         "total_chunks": 0,
+    #                         "shards": {}
+    #                     }
+                    
+    #                 if largest_filename not in node_shards_info[target_node_ip]["shards"]:
+    #                     node_shards_info[target_node_ip]["shards"][largest_filename] = []
+                    
+    #                 if largest_shard not in node_shards_info[target_node_ip]["shards"][largest_filename]:
+    #                     node_shards_info[target_node_ip]["shards"][largest_filename].append(largest_shard)
+    #                     node_shards_info[target_node_ip]["total_chunks"] += largest_size
+                    
+    #                 # 5. Actualizar files
+    #                 if target_node_ip not in self.raft.global_index["files"]:
+    #                     self.raft.global_index["files"][target_node_ip] = []
+                    
+    #                 if largest_filename not in self.raft.global_index["files"][target_node_ip]:
+    #                     self.raft.global_index["files"][target_node_ip].append(largest_filename)
+                
+    #             logger.info(
+    #                 f"Shard {largest_shard} copiado exitosamente a {target_node_ip}"
+    #             )
+                
+    #             # 6. Si ahora hay más de k=3 réplicas, eliminar del nodo origen
+    #             distribution = files_metadata.get(largest_filename, {}).get("chunk_distribution", {})
+    #             nodes_with_shard = distribution.get(largest_shard, [])
+                
+    #             if len(nodes_with_shard) > self.raft.db_replication_factor:
+    #                 logger.info(f"Eliminando shard {largest_shard} de {max_node} (réplicas excedidas)")
+                    
+    #                 deleted = remote_storage.delete_file_range(largest_filename, largest_shard, max_node)
+                    
+    #                 if deleted:
+    #                     # Actualizar índice
+    #                     with self.raft._lock:
+    #                         nodes_with_shard.remove(max_node)
+                            
+    #                         # Actualizar node_shards
+    #                         if max_node in node_shards_info:
+    #                             if largest_filename in node_shards_info[max_node]["shards"]:
+    #                                 if largest_shard in node_shards_info[max_node]["shards"][largest_filename]:
+    #                                     node_shards_info[max_node]["shards"][largest_filename].remove(largest_shard)
+    #                                     node_shards_info[max_node]["total_chunks"] -= largest_size
+                                        
+    #                                     # Si no quedan más shards de este archivo, eliminarlo
+    #                                     if not node_shards_info[max_node]["shards"][largest_filename]:
+    #                                         del node_shards_info[max_node]["shards"][largest_filename]
+                        
+    #                     logger.info(f"Shard eliminado de {max_node}")
+            
+    #         except Exception as e:
+    #             logger.error(f"Error copiando shard: {e}")
+    #             import traceback
+    #             traceback.print_exc()
+            
+    #         # Marcar como ALIVE una vez completado
+    #         with self.raft_server._lock:
+    #             if self.raft_server.node_states.get(target_node_ip) in ["RE-SPAWN", "NEW"]:
+    #                 self.raft_server.node_states[target_node_ip] = "ALIVE"
+    #                 logger.info(f"Nodo {target_node_ip} marcado como ALIVE tras balanceo")
+        
+    #     except Exception as e:
+    #         logger.info(f"Error balanceando shards: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+
+
+    # ============================================================================
+    # MANEJO DE BASE DE DATOS DE METADATOS
+    # ============================================================================
+    def _manage_db_nodes(self):
+        """
+        Gestiona los nodos de base de datos para mantener exactamente k nodos
+        (líder + k-1 adicionales).
+        """
+        #TODO: Manejar caso de particion de red, sincronizar DBs
+        if self.raft.state != "leader":
+            return
+        
+        k = self.raft.db_replication_factor
+        with self.raft._lock:
+            current_db_nodes = self.raft.global_index["db_nodes"].copy()
+
+        active_nodes = [node_id for node_id, _, _ in self.raft_server._get_client_nodes() 
+                        if self.raft_server._is_node_active(node_id)] + [self.host]
+        active_nodes = self._filter_active_nodes(active_nodes)
+        
+        # logger.info("\n=== GESTION DE NODOS DB ===")
+        # logger.info(f"k requerido: {k}")
+        # logger.info(f"Nodos DB actuales: {current_db_nodes}")
+        # logger.info(f"Nodos activos totales: {active_nodes}")
+        
+        # Asegurar que el líder esté en db_nodes
+        if self.raft.node_id not in current_db_nodes:
+            with self.raft._lock:
+                current_db_nodes.add(self.raft.node_id)
+                logger.info(f"Líder {self.raft.node_id} agregado a db_nodes")
+        
+        # Contar nodos DB activos (excluyendo el líder)
+        active_db_nodes = [n for n in current_db_nodes 
+                        if n != self.raft.node_id and n in active_nodes]
+        
+        # logger.info(f"Nodos DB activos (sin líder): {active_db_nodes} (total: {len(active_db_nodes)})")
+        
+        # Si faltan nodos DB
+        if len(active_db_nodes) < k - 1 and len(active_nodes) >= k - 1:
+            needed = (k - 1) - len(active_db_nodes)
+            candidates = [n for n in active_nodes 
+                        if n not in current_db_nodes]
+            
+            logger.info(f"Faltan {needed} nodos DB. Candidatos: {candidates}")
+            
+            # Seleccionar candidatos de forma consistente (ordenar por ID)
+            candidates.sort()
+            new_db_nodes = candidates[:needed]
+            
+            logger.info(f"Nodos seleccionados para promoción: {new_db_nodes}")
+            
+            for node_id in new_db_nodes:
+                logger.info(f"Promoviendo nodo {node_id} a nodo DB...")
+                
+                current_db_nodes.add(node_id)
+                with self.raft._lock:
+                    if node_id not in self.raft.global_index["node_versions"]:
+                        self.raft.global_index["node_versions"][node_id] = {
                             "read_version": 0,
                             "write_version": 0,
                             "db_version": 0,
                             "db_version_prev": 0,
-                            "is_db_node": node in self.raft.global_index["db_nodes"]
+                            "is_db_node": True
                         }
-            except Exception as e:
-                logger.error(f"Error al obtener archivos del nodo {node}: {e}")
-                self.raft.global_index["files"][node] = []
+                    else:
+                        self.raft.global_index["node_versions"][node_id]["is_db_node"] = True
+                
+                # Sincronizar con el nodo DB que tiene mayor db_version
+                try:
+                    # Encontrar nodo DB con mayor db_version
+                    best_source_node = None
+                    max_db_version = -1
+                    
+                    for db_node in current_db_nodes:
+                        if db_node == node_id:  # No comparar consigo mismo
+                            continue
+                        
+                        node_version_info = self.raft.global_index["node_versions"].get(db_node, {})
+                        db_version = node_version_info.get("db_version", 0)
+                        
+                        if db_version > max_db_version:
+                            max_db_version = db_version
+                            best_source_node = db_node
+                    
+                    if best_source_node:
+                        logger.info(f"Sincronizando {node_id} desde {best_source_node} (db_version: {max_db_version})")
+                        
+                        # Obtener JSON del nodo fuente
+                        remote_db = RemoteDBManager()
+                        
+                        try:
+                            source_json = remote_db.get_json_dump(best_source_node)
+                            
+                            if source_json:
+                                logger.info(f"JSON obtenido de {best_source_node}, tamaño del log: {len(source_json.get('log', []))}")
+                                
+                                # Enviar JSON al nuevo nodo
+                                if node_id == self.raft_server.host:
+                                    # Nodo local
+                                    logger.info(f"Restaurando JSON localmente en {node_id}")
+                                    self.raft_server.db_instance.restore_json_from_dump(source_json)
+                                    self.raft_server.db_instance.execute_pending_operations_from_json()
+                                else:
+                                    # Nodo remoto - usar RemoteDBManager
+                                    logger.info(f"Restaurando JSON remotamente en {node_id}")
+                                    
+                                    # restore_json_from_dump necesita recibir json_data como parámetro
+                                    client = remote_db._get_client_server(node_id)
+                                    result = client.restore_json_from_dump(source_json)
+                                    
+                                    if result.get("success"):
+                                        logger.info(f"JSON restaurado en {node_id}, ejecutando operaciones pending...")
+                                        # Ejecutar operaciones pending del JSON
+                                        client.execute_pending_operations_from_json()
+                                        logger.info(f"Operaciones pending ejecutadas en {node_id}")
+                                    else:
+                                        logger.error(f"Error restaurando JSON en {node_id}: {result.get('error', 'Unknown')}")
+                                        raise Exception(f"Failed to restore JSON: {result.get('error')}")
+                                
+                                # Actualizar versiones del nuevo nodo
+                                with self.raft._lock:
+                                    self.raft.global_index["node_versions"][node_id]["db_version"] = max_db_version
+                                    self.raft.global_index["node_versions"][node_id]["db_version_prev"] = source_json.get("db_version_prev", 0)
+                                
+                                logger.info(f"Nodo {node_id} sincronizado exitosamente con db_version={max_db_version}")
+                            else:
+                                logger.warning(f"JSON vacío o None recibido de {best_source_node}")
+                        
+                        except Exception as e:
+                            logger.error(f"Error obteniendo o restaurando JSON de {best_source_node}: {e}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                
+                except Exception as e:
+                    logger.error(f"Error sincronizando nuevo nodo DB {node_id}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
+                logger.info(f"Nodo {node_id} promovido a nodo de base de datos")
         
-        # Incrementar versión del índice
-        with self.raft._lock:
-            self.raft.global_index["version"] += 1
-        
-        return 
-    
-    def _process_pending_tasks(self):
-        """Procesa tareas pendientes recuperadas del log"""
-        # with self.raft._lock:
-        #     pending = [t for t in self.raft.pending_tasks if t["status"] == "pending"]
+        # Si sobran nodos DB
+        elif len(active_db_nodes) > k - 1:
+            excess = len(active_db_nodes) - (k - 1)
             
-        #     for task in pending[:5]:  # Procesar máximo 5 por ciclo
-        #         try:
-        #             task_type = task["request_data"].get("type")
-                    
-        #             if task_type == "metadata_write":
-        #                 self._retry_metadata_write(task)
-        #             elif task_type == "file_write":
-        #                 self._retry_file_write(task)
-        #             #TODO: Implementar correctamente esta funcion cuando se vaya a usar SSE
-                    
-        #         except Exception as e:
-        #             logger.error(f"Error procesando tarea {task['task_id']}: {e}")
-        pass
+            logger.info(f"Sobran {excess} nodos DB")
+            
+            # Ordenar por db_version (menor primero) y eliminar el exceso
+            db_nodes_with_versions = []
+            for node_id in active_db_nodes:
+                version_info = self.raft.global_index["node_versions"].get(node_id, {})
+                db_version = version_info.get("db_version", 0)
+                db_nodes_with_versions.append((node_id, db_version))
+            
+            db_nodes_with_versions.sort(key=lambda x: x[1])  # Ordenar por db_version
+            nodes_to_remove = [node_id for node_id, _ in db_nodes_with_versions[:excess]]
+            
+            logger.info(f"Nodos a degradar: {nodes_to_remove}")
+            
+            for node_id in nodes_to_remove:
+                current_db_nodes.discard(node_id)
+                with self.raft._lock:
+                    if node_id in self.raft.global_index["node_versions"]:
+                        self.raft.global_index["node_versions"][node_id]["is_db_node"] = False
+                        self.raft.global_index["node_versions"][node_id]["db_version"] = 0
+                        self.raft.global_index["node_versions"][node_id]["db_version_prev"] = 0
+                
+                logger.info(f"Nodo {node_id} degradado de nodo de base de datos")
+        
+        else:
+            logger.info(Colors.info(f"Nodos DB correctos: {len(active_db_nodes) + 1} de {k}"))
 
-    def _retry_metadata_write(self, task: dict):
-        """Reintenta una escritura de metadata pendiente"""
-        # Implementación de retry para metadata
-        pass  # TODO: implementar cuando sea necesario
+            # --- Comprobación de sincronización de nodos DB ---
+            try:
+                # Obtener información de sincronización de todos los nodos DB
+                node_sync_info = {}
+                
+                for node_id in current_db_nodes:
+                    try:
+                        if self.raft_server.node_states[node_id] == "DEAD":
+                            continue
+                        if node_id == self.raft.node_id:
+                            # Nodo líder local
+                            node_data = self.raft_server.db_instance.json_manager.read()
+                            db_version = node_data.get("db_version", 0)
+                            last_op = self.raft_server.db_instance.json_manager.get_last_operation()
+                        else:
+                            # Nodo DB remoto
+                            remote_db = RemoteDBManager()
+                            node_data = remote_db.get_json_dump(node_id)
+                            if node_data:
+                                db_version = node_data.get("db_version", 0)
+                                log = node_data.get("log", [])
+                                last_op = log[-1] if log else None
+                            else:
+                                logger.warning(f"No se pudo obtener JSON del nodo {node_id}")
+                                continue
+                        
+                        node_sync_info[node_id] = {
+                            "db_version": db_version,
+                            "last_operation": last_op,
+                            "json_data": node_data
+                        }
+                        
+                    except Exception as e:
+                        logger.error(f"Error obteniendo info de sincronización de {node_id}: {e}")
+                        raise e
+                
+                # Verificar si todos tienen la misma db_version y última operación
+                if node_sync_info:
+                    # Obtener valores del líder
+                    leader_id = self.raft.node_id
+                    if leader_id in node_sync_info:
+                        leader_info = node_sync_info[leader_id]
+                        expected_db_version = leader_info["db_version"] if leader_info["db_version"] else -1
+                        expected_last_op = leader_info["last_operation"] if leader_info["last_operation"] else {"term": -1, "task_id": -1}
+                        
+                        term1 = expected_last_op["term"]
+                        task1 = expected_last_op["task_id"]
+                        logger.info(Colors.info(f"\tLíder {leader_id}:\tdb_version={expected_db_version},\tlast_op_term={term1},\ttask_id={task1}"))
+                        
+                        # Comparar con cada nodo DB
+                        for node_id, node_info in node_sync_info.items():
+                            if node_id == leader_id:
+                                continue
+                            
+                            node_db_version = node_info["db_version"] if node_info["db_version"] else -1
+                            node_last_op = node_info["last_operation"] if node_info["last_operation"] else {"term": -1, "task_id": -1}
+                            
+                            term2 = node_last_op["term"]
+                            task2 = node_last_op["task_id"]
+                            logger.info(Colors.info(f"\tNodo {node_id}:\tdb_version={node_db_version},\tlast_op_term={term2},\ttask_id={task2}"))
+                            
+                            # Comparar db_version
+                            if (node_db_version != expected_db_version) or (expected_last_op.get("task_id") != node_last_op.get("task_id") or (node_last_op["term"] != expected_last_op["term"])) :
+                                
+                                logger.warning(f"Nodo  {node_id} y lider: {leader_id} estan desincronizados. \ndb_version: {node_db_version} vs {expected_db_version} \ntask_id: {task1} vs {task2}")
+                                
+                                logger.info(f"Sincronizando nodo {node_id} con {leader_id}...")
+                                # self._sync_db_nodes(
+                                #         node_id,
+                                #         leader_id, 
+                                #         node_info["json_data"], 
+                                #         leader_info["json_data"]
+                                #     )
+            
+            except Exception as e:
+                logger.error(f"Error en comprobación de sincronización: {e}")
+                import traceback
+                traceback.print_exc()
+                
+        # Actualizar el índice global
+        with self.raft._lock:
+            self.raft.global_index["db_nodes"] = current_db_nodes
+            self.raft.global_index["version"] += 1
+        # logger.info(f"=== FIN GESTION DE NODOS DB ===\n")
 
-    def _retry_file_write(self, task: dict):
-        """Reintenta una escritura de archivo pendiente"""
-        # Implementación de retry para files
-        pass  # TODO: implementar cuando sea necesario
 
     # ============================================================================
     # COORDINACIÓN DE LECTURA DE METADATA
@@ -1455,7 +2145,7 @@ class LeaderManager:
 
         import logging
         logger = logging.getLogger("LeaderManager")
-        logger.info(f"\n=== INICIO write_file ===")
+        logger.info("\n=== INICIO write_file ===")
         logger.info(f"Nodos en global_index: {list(self.raft.global_index['node_versions'].keys())}")
 
         # Convertir el diccionario a string
@@ -1505,7 +2195,7 @@ class LeaderManager:
                     "data": range_data
                 })
 
-        logger.info(f"\n=== FIN write_file ===")
+        logger.info("\n=== FIN write_file ===")
         # Convertir diccionarios a string
         logger.info(f"Distribución final: {str(distribution)}")
         logger.info(f"Contador de selecciones: {str(already_selected)}")
@@ -1535,8 +2225,8 @@ class LeaderManager:
                 data = task["data"]
 
                 if isinstance(data, dict):
-                    logger.info(f"\n\n[FILE] Error: data es un dict, no bytes. Task:", task)
-                    logger.info(f"Data: {data}")
+                    logger.info(f"\n\n[FILE] Error: data es un dict, no bytes. Task:")
+                    logger.info(f"Data: {data.keys()}")
                     
                 if node_id == self.raft_server.host:
                     self.raft_server.storage_instance.create_file_range(filename, data, range_key)
@@ -1550,6 +2240,7 @@ class LeaderManager:
             except Exception as e:
                 errors.append({"task": task, "error": str(e)})
                 logger.error(f"Error escribiendo en {node_id}: {e}")
+                raise e
         
         for task in tasks:
             t = threading.Thread(target=write_task, args=(task,))
@@ -1561,7 +2252,7 @@ class LeaderManager:
             t.join(timeout=RPC_TIMEOUT * 2)
         
         if errors:
-            logger.warning(f"Errores en escritura en {len(tasks)} tareas: {errors}. Intentando continuar...")
+            logger.warning(f"Errores en escritura en {len(tasks)} tareas: Intentando continuar...")
 
     def _update_file_index(self, filename: str, total_chunks: int, distribution: dict):
         """Actualiza el índice global con información del archivo"""
@@ -1610,7 +2301,11 @@ class LeaderManager:
             
         logger.info(f"Índice actualizado para {filename} (v{self.raft.global_index['version']})")
 
-    def _get_sorted_db_nodes_by_read(self) -> (List[str], Dict[str, int]): # type: ignore
+    # ============================================================================
+    # HELPERS VARIOS
+    # ============================================================================
+
+    def _get_sorted_db_nodes_by_read(self) -> (List[str], Dict[str, int]):
         """Retorna nodos DB ordenados por read_version (menor primero) y un diccionario con los read versions"""
         with self.raft._lock:
             db_nodes = list(self.raft.global_index["db_nodes"])
