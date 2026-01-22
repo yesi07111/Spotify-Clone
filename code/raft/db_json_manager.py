@@ -14,7 +14,7 @@ class DBJsonManager:
         self.lock = threading.Lock()
         # self._ensure_json_exists()
     
-    def ensure_json_exists(self):
+    def ensure_json_exists(self, become_new_leader=False):
         """Crea el JSON si no existe"""
         if not os.path.exists(DB_JSON_PATH):
             from raft.utils import get_raft_instance
@@ -27,6 +27,9 @@ class DBJsonManager:
                 "db_version_prev": 0,
                 "log": []
             }
+
+            if become_new_leader:
+                initial_data["become_new_leader"] = True
             
             with open(DB_JSON_PATH, 'w') as f:
                 json.dump(initial_data, f, indent=2)
@@ -90,6 +93,19 @@ class DBJsonManager:
         data["db_version_prev"] = data["db_version"]
         data["db_version"] = data["db_version"] + 1
         self.write(data)
+
+    def update_db_version(self, db_version):
+        """Actualiza versiones tras volverse DB"""
+        data = self.read()
+        data["db_version_prev"] = db_version - 1
+        data["db_version"] = db_version
+        self.write(data)
+    
+    def update_term(self, term):
+        """Actualiza versiones tras volverse DB"""
+        data = self.read()
+        data["term"] = term
+        self.write(data)
     
     def update_json_term(self, new_term):
         data = self.read()
@@ -104,7 +120,9 @@ class DBJsonManager:
     def get_db_versions(self) -> tuple:
         """Retorna (db_version, db_version_prev)"""
         data = self.read()
-        return data["db_version"], data["db_version_prev"]
+        db_version = data["db_version"] if data["db_version"] else 0
+        db_version_prev = data["db_version_prev"] if data["db_version_prev"] else 0
+        return db_version, db_version_prev
     
     def get_pending_operations(self) -> list:
         """Retorna operaciones en estado pending"""
@@ -127,7 +145,21 @@ class DBJsonManager:
     
     def copy_from_remote(self, remote_json_data: Dict[str, Any]):
         """Copia el JSON desde un nodo remoto"""
+        log = remote_json_data.get("log", {})
+        if log:
+            for op in log:
+                op["status"] = "pending"
+            remote_json_data["log"] = log 
+        
         self.write(remote_json_data)
+
+    def delete_json():
+        from raft.log_utils import log_error
+        if os.path.exists(DB_JSON_PATH):
+            try:
+                os.remove(DB_JSON_PATH)
+            except OSError as e:
+                log_error("JSON MANAGER" , f"Error borrando el JSON: {e}")
     
     def get_last_5_completed(self) -> list:
         """Retorna las últimas 5 operaciones completed"""

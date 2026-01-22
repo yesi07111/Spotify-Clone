@@ -6,14 +6,14 @@ import uuid
 import Pyro5.api as rpc
 
 from dataclasses import dataclass
-from typing import List, Optional, Callable, Any, Dict
+from typing import List, Optional, Callable, Any, Dict, Set
 
 from .db_manager import DBManager
 from .storage_manager import StorageManager
 from .discovery import get_service_tasks
 
 LOGGINGS_ENABLED = False
-HEARTBEAT_INTERVAL = 1 #0.5 antes del DNS
+HEARTBEAT_INTERVAL = [1, 2.9] #0.5 antes del DNS
 ELECTION_TIMEOUT_RANGE = (3, 7) #(1, 2) antes del DNS
 DB_REPLICATION_FACTOR = 3  # k nodos de base de datos
 
@@ -167,7 +167,7 @@ class RaftConsensusFunctions:
         self._sync_database_on_become_leader()
 
         # DESPUÉS recuperar tareas pendientes del log
-        self.recover_pending_tasks_on_become_leader()
+        # self.recover_pending_tasks_on_become_leader()
 
         # FINALMENTE notificar al callback externo
         self.on_become_leader()
@@ -216,7 +216,7 @@ class RaftConsensusFunctions:
             "state": self.state,
             "current_leader_id": self.current_leader_id,
         }
-
+    
     def append_entries(
         self,
         term: int,
@@ -226,6 +226,8 @@ class RaftConsensusFunctions:
         leader_commit: int,
         entries: Optional[List[dict]] = None,
         leader_index: Optional[dict] = None,
+        previous_active_nodes: Optional[List] = None,
+        node_states: Optional[dict] = None
     ) -> dict:
         entries_count = len(entries) if entries else 0
         self._log(
@@ -233,7 +235,7 @@ class RaftConsensusFunctions:
             f"term={term}, prev_log_index={prev_log_index}, "
             f"prev_log_term={prev_log_term}, entries={entries_count}"
         )
-
+        from raft.log_utils import log_info, log_warning, log_error
         log_entries = None
         if entries:
             log_entries = [
@@ -241,12 +243,22 @@ class RaftConsensusFunctions:
             ]
 
         if term < self.current_term:
-            self._log(
+            #AQUI USAR SU INDICE PARA MERGEAR ANTES DE RECHAZAR
+            log_warning("RAFT CONSENSUS FUNCTION", f"Nodo: {self.node_id} con estado {self.state} recibió append entries de nodo \"leader\" {leader_id} con menor term al propio: propio {self.current_term} vs \"leader\": {term}")
+            if leader_index:
+                log_info("RAFT CONSENSUS FUNCTION", f"Como llego un leader_index se va a tomar todo lo que este tenga en el propio antes de rechazarlo")
+                self._merge_index_info(leader_index)
+            log_warning("RAFT CONSENSUS FUNCTION",
                 f"Rechazando AppendEntries: term {term} < term actual {self.current_term}"
             )
             return {"term": self.current_term, "success": False}
 
+        global_index_copy = {}
         if term >= self.current_term:
+            if self.state == "leader":
+                with self._lock:
+                    global_index_copy = self.global_index.copy()
+                
             if term > self.current_term:
                 self._log(
                     f"Actualizando término desde líder {leader_id}: {self.current_term} -> {term}"
@@ -265,6 +277,7 @@ class RaftConsensusFunctions:
                     f"Inconsistencia de log: término no coincide en índice {prev_log_index} "
                     f"(esperado={prev_log_term}, encontrado={self.log[prev_log_index - 1].term})"
                 )
+                #AQUI TAMBIEN ME QUEDO CON EL INDICE ,OTRA CSOA: UPDATE INDEX SOLO ACTUALIZA NO BORRA
                 return {"term": self.current_term, "success": False}
 
         if log_entries:
@@ -281,13 +294,30 @@ class RaftConsensusFunctions:
             old_commit = self.commit_index
             self.commit_index = min(leader_commit, len(self.log))
 
-            # Actualizar el índice global desde el líder
-            if leader_index is not None:
-                self.global_index = leader_index
-                self._log(f"Índice global actualizado desde líder (versión: {leader_index.get('version', 0)})")
-            self._log(f"Commit index actualizado: {old_commit} -> {self.commit_index}")
+        # Actualizar el índice global desde el líder
+        if leader_index is not None:
+            self.global_index = leader_index
+            self._log(f"Índice global actualizado desde líder (versión: {leader_index.get('version', 0)})")
+        
+        #AQUI
+        from raft.utils import get_raft_server
+        server: RaftServer = get_raft_server()
+        if previous_active_nodes is not None:
+            server.previous_active_nodes = previous_active_nodes
+            previous = ", ".join(server.previous_active_nodes)
+            self._log(f"Nodos activos anteriores actualizado desde líder (versión: {leader_index.get('version', 0)}) \nNodos: {previous}")
 
-        return {"term": self.current_term, "success": True}
+        states = ""
+        if node_states is not None:
+            server.node_states = node_states
+            for key in server.node_states.keys():
+                states += "\n" + key + ": " + node_states[key] 
+            self._log(f"Estado de nodos actualizado desde líder (versión: {leader_index.get('version', 0)}) \nEstados: {states}")
+
+        old_commit = self.commit_index
+        self._log(f"Commit index actualizado: {old_commit} -> {self.commit_index}")    
+
+        return {"term": self.current_term, "global_index": global_index_copy, "success": True}
 
     def request_vote(
         self,
@@ -379,138 +409,238 @@ class RaftConsensusFunctions:
         )
 
         return {"success": True, "log_index": log_index}
-    
+        
     # DB MANAGEMENT 
+    def _merge_index_info(self, index: dict):
+        from raft.log_utils import log_info, log_warning, log_error
+        own = self.global_index
+        if not isinstance(index, dict):
+            return
+        
+        # Diccionario para rastrear cambios agregados
+        added_changes = {
+            "version": None,
+            "files": {},
+            "files_metadata": {},
+            "db_nodes": [],
+            "node_versions": {},
+            "node_shards": {}
+        }
+        
+        try:
+            # version → solo si no existe
+            if "version" in index and "version" not in own:
+                own["version"] = index["version"]
+                added_changes["version"] = index["version"]
+            
+            # files: {node_id: [files]}
+            if "files" in index and isinstance(index["files"], dict):
+                for node_id, files in index["files"].items():
+                    if node_id not in own["files"]:
+                        own["files"][node_id] = list(files)
+                        added_changes["files"][node_id] = list(files)
+                    else:
+                        new_files = []
+                        for f in files:
+                            if f not in own["files"][node_id]:
+                                own["files"][node_id].append(f)
+                                new_files.append(f)
+                        if new_files:
+                            added_changes["files"][node_id] = new_files
+            
+            # files_metadata
+            if "files_metadata" in index and isinstance(index["files_metadata"], dict):
+                for filename, meta in index["files_metadata"].items():
+                    if filename not in own["files_metadata"]:
+                        own["files_metadata"][filename] = meta.copy()
+                        added_changes["files_metadata"][filename] = meta.copy()
+                    else:
+                        new_meta = {}
+                        for k, v in meta.items():
+                            if k not in own["files_metadata"][filename]:
+                                own["files_metadata"][filename][k] = v
+                                new_meta[k] = v
+                        if new_meta:
+                            added_changes["files_metadata"][filename] = new_meta
+            
+            # db_nodes (set)
+            if "db_nodes" in index:
+                if isinstance(index["db_nodes"], (set, list, tuple)):
+                    new_nodes = set(index["db_nodes"]) - own["db_nodes"]
+                    own["db_nodes"].update(index["db_nodes"])
+                    if new_nodes:
+                        added_changes["db_nodes"] = list(new_nodes)
+            
+            # node_versions
+            if "node_versions" in index and isinstance(index["node_versions"], dict):
+                for node_id, versions in index["node_versions"].items():
+                    if node_id not in own["node_versions"]:
+                        own["node_versions"][node_id] = versions.copy()
+                        added_changes["node_versions"][node_id] = versions.copy()
+                    else:
+                        new_versions = {}
+                        for k, v in versions.items():
+                            if k not in own["node_versions"][node_id]:
+                                own["node_versions"][node_id][k] = v
+                                new_versions[k] = v
+                        if new_versions:
+                            added_changes["node_versions"][node_id] = new_versions
+            
+            # node_shards
+            if "node_shards" in index and isinstance(index["node_shards"], dict):
+                for node_id, shard_info in index["node_shards"].items():
+                    if node_id not in own["node_shards"]:
+                        own["node_shards"][node_id] = shard_info.copy()
+                        added_changes["node_shards"][node_id] = shard_info.copy()
+                    else:
+                        own_shard = own["node_shards"][node_id]
+                        new_shard_info = {}
+                        for k, v in shard_info.items():
+                            if k not in own_shard:
+                                own_shard[k] = v
+                                new_shard_info[k] = v
+                            elif k == "shards" and isinstance(v, dict):
+                                new_shards = {}
+                                for filename, ranges in v.items():
+                                    if filename not in own_shard["shards"]:
+                                        own_shard["shards"][filename] = list(ranges)
+                                        new_shards[filename] = list(ranges)
+                                    else:
+                                        new_ranges = []
+                                        for r in ranges:
+                                            if r not in own_shard["shards"][filename]:
+                                                own_shard["shards"][filename].append(r)
+                                                new_ranges.append(r)
+                                        if new_ranges:
+                                            new_shards[filename] = new_ranges
+                                if new_shards:
+                                    new_shard_info["shards"] = new_shards
+                        if new_shard_info:
+                            added_changes["node_shards"][node_id] = new_shard_info
+            
+            log_info("RAFT CONSENSUS FUNCTION - MERGE INDEX", f"Se completo con exito el merge de los indices globales")
+            
+            # Filtrar cambios vacíos y mostrar solo lo que se agregó
+            filtered_changes = {}
+            if added_changes["version"] is not None:
+                filtered_changes["version"] = added_changes["version"]
+            if added_changes["files"]:
+                filtered_changes["files"] = added_changes["files"]
+            if added_changes["files_metadata"]:
+                filtered_changes["files_metadata"] = added_changes["files_metadata"]
+            if added_changes["db_nodes"]:
+                filtered_changes["db_nodes"] = added_changes["db_nodes"]
+            if added_changes["node_versions"]:
+                filtered_changes["node_versions"] = added_changes["node_versions"]
+            if added_changes["node_shards"]:
+                filtered_changes["node_shards"] = added_changes["node_shards"]
+            
+            if filtered_changes:
+                log_info("RAFT CONSENSUS FUNCTION - MERGE INDEX", f"Y los cambios que estaban en el índice del otro y no en el propio ya agregados son: {filtered_changes}")
+            else:
+                log_info("RAFT CONSENSUS FUNCTION - MERGE INDEX", "No se agregaron cambios nuevos (el índice propio ya contenía toda la información)")
+                
+        except Exception as e:
+            log_error("RAFT CONSENSUS FUNCTION - MERGE INDEX", f"Ha ocurrido un error al mergear los indices: {e}")
+            
     def _sync_database_on_become_leader(self):
         """
-        Sincroniza la base de datos cuando este nodo se convierte en líder.
-        Encuentra el nodo con la db_version más alta y copia su DB y JSON.
+        Da aviso de sincronización para la base de datos cuando este nodo se convierte en líder.
+        En LeaderManager ya encuentra el nodo con la db_version más alta y copia su DB y JSON.
         """
-        self._log("Sincronizando base de datos como nuevo líder...")
-        #TODO: REVISAR QUE FUNCIONA
-        
-        from raft.leader_manager import RemoteDBManager
         from raft.db_json_manager import DBJsonManager
+        from raft.log_utils import log_info, log_warning
         
-        remote_db = RemoteDBManager()
+        # Info - azul para inicio de sincronización
+        log_info("DB SYNC ON BECOME LEADER", f"Iniciando sincronización de base de datos para nuevo líder '{self.node_id}'", 
+                colorize_full=True, color="blue")
+        
+        # Obtener instancias necesarias
         json_manager = DBJsonManager()
         
-        # Buscar nodo DB con mayor db_version
+        # Obtener todos los nodos DB del índice global
         db_nodes = list(self.global_index.get("db_nodes", set()))
         
         if not db_nodes:
-            # Primer nodo, inicializar
+            log_info("DB SYNC ON BECOME LEADER", "Primer nodo DB detectado, inicializando estructuras", 
+                    colorize_full=True, color="blue")
+            
+            # Inicializar como primer nodo DB
+            self._initialize_as_first_db_node()
+            return
+        
+        # Asumir todos los nodos DB son activos
+        active_db_nodes = db_nodes
+
+        # Si el nodo actual era DB entonces no hay que hacer nada más
+        if self.node_id in active_db_nodes:
+            log_info("DB SYNC ON BECOME LEADER", "Nuevo líder detectado como nodo DB, se deja la sincronización al LeaderManager", 
+                    colorize_full=True, color="blue")
+            return
+        
+        # Remover el nodo actual de la lista para hacer el aviso de sincronización
+        nodes_to_sync = [node for node in active_db_nodes if node != self.node_id]
+        
+        log_info("DB SYNC ON BECOME LEADER", 
+                f"Nodos DB aparentemente disponibles para sincronización: {nodes_to_sync} (de {len(db_nodes)} totales)", 
+                colorize_full=True, color="blue")
+        
+        if not nodes_to_sync:
+            log_warning("DB SYNC ON BECOME LEADER", 
+                    "No hay nodos DB activos para sincronización, procediendo como nodo independiente", 
+                    colorize_full=True, color="yellow")
+            
+            # Inicializar sin sincronización
+            self._initialize_without_sync(json_manager)
+            return
+        
+        # Si el nodo no es DB para empezar y hay otros nodos DB (sin saber si estan vivos o no) entonces se avisa que hay que actualizarlo al LeaderManager y que este se encargue
+        json_manager.ensure_json_exists(become_new_leader=True)
+        log_info("DB SYNC ON BECOME LEADER", 
+                f"Nuevo nodo líder lleva aviso de sincronización en su json", 
+                colorize_full=True, color="blue")
+    
+    def _initialize_as_first_db_node(self):
+        from raft.log_utils import log_info, log_warning, log_error
+        """Inicializa el nodo como el primer nodo de base de datos"""
+        self.global_index["node_versions"][self.node_id] = {
+            "read_version": 0,
+            "write_version": 0,
+            "db_version": 0,
+            "db_version_prev": 0,
+            "is_db_node": True
+        }
+        self.global_index["db_nodes"].add(self.node_id)
+        self.global_index["version"] += 1
+        
+        # Asegurar que existe el JSON
+        from raft.db_json_manager import DBJsonManager
+        json_manager = DBJsonManager()
+        json_manager.ensure_json_exists()
+        
+        log_info("DB SYNC ON BECOME LEADER", "Nodo líder inicializado como primer nodo de base de datos", 
+                colorize_full=True, color="blue")
+
+    def _initialize_without_sync(self, json_manager):
+        """Inicializa el nodo sin sincronización"""
+        from raft.log_utils import log_info
+        # Actualizar versiones de DB desde JSON local
+        db_version, db_version_prev = json_manager.get_db_versions()
+        
+        with self._lock:
             self.global_index["node_versions"][self.node_id] = {
                 "read_version": 0,
                 "write_version": 0,
-                "db_version": 0,
-                "db_version_prev": 0,
+                "db_version": db_version,
+                "db_version_prev": db_version_prev,
                 "is_db_node": True
             }
             self.global_index["db_nodes"].add(self.node_id)
             self.global_index["version"] += 1
-            remote_db.db_manager.json_manager.ensure_json_exists()
-            return
         
-        # Encontrar nodo con mayor db_version
-        best_node = None
-        best_version = -1
-        
-        for node_id in db_nodes:
-            if node_id == self.node_id:
-                continue
-            
-            try:
-                json_dump = remote_db.get_json_dump(node_id)
-                node_version = json_dump.get("db_version", 0)
-                
-                if node_version > best_version:
-                    best_version = node_version
-                    best_node = node_id
-            except Exception as e:
-                self._log(f"Error consultando nodo {node_id}: {e}")
-        
-        if best_node:
-            try:
-                # Copiar BD completa
-                db_dump = remote_db.get_full_dump(best_node)
-                self.raft_server.db_instance.restore_from_dump(db_dump)
-                self._log(f"BD copiada desde nodo {best_node}")
-                
-                # Copiar JSON
-                json_dump = remote_db.get_json_dump(best_node)
-                json_manager.copy_from_remote(json_dump)
-                self._log(f"JSON copiado desde nodo {best_node}")
-                
-                # Ejecutar operaciones pending del JSON
-                self.raft_server.db_instance.execute_pending_operations_from_json()
-                
-                # Actualizar índice global
-                db_version, db_version_prev = json_manager.get_db_versions()
-
-                # Determinar si es nodo NEW, RE-SPAWN o ALIVE
-                node_status = self.raft_server.node_states.get(self.node_id, "NEW")
-
-                if node_status == "NEW":
-                    # Calcular read_version y write_version mínimos de nodos vivos
-                    from raft.discovery import discover_active_clients
-                    active_nodes = discover_active_clients()
-                    
-                    min_read_version = float('inf')
-                    min_write_version = float('inf')
-                    
-                    for nid in active_nodes:
-                        if nid == self.node_id:
-                            continue
-                        
-                        if nid in self.global_index["node_versions"]:
-                            rv = self.global_index["node_versions"][nid].get("read_version", 0)
-                            wv = self.global_index["node_versions"][nid].get("write_version", 0)
-                            
-                            min_read_version = min(min_read_version, rv)
-                            min_write_version = min(min_write_version, wv)
-                    
-                    # Si no hay otros nodos, usar 0
-                    if min_read_version == float('inf'):
-                        min_read_version = 0
-                    if min_write_version == float('inf'):
-                        min_write_version = 0
-                    
-                    self.global_index["node_versions"][self.node_id] = {
-                        "read_version": min_read_version,
-                        "write_version": min_write_version,
-                        "db_version": db_version,
-                        "db_version_prev": db_version_prev,
-                        "is_db_node": True
-                    }
-                    
-                    self._log(f"Nodo NEW: inicializado con read_v={min_read_version}, write_v={min_write_version}")
-
-                elif node_status in ["RE-SPAWN", "ALIVE"]:
-                    # Ya existe en el índice, solo actualizar db_version
-                    if self.node_id in self.global_index["node_versions"]:
-                        self.global_index["node_versions"][self.node_id]["db_version"] = db_version
-                        self.global_index["node_versions"][self.node_id]["db_version_prev"] = db_version_prev
-                        self.global_index["node_versions"][self.node_id]["is_db_node"] = True
-                        
-                        self._log(f"Nodo {node_status}: actualizado db_version={db_version}")
-                    else:
-                        # Fallback si no existe
-                        self.global_index["node_versions"][self.node_id] = {
-                            "read_version": 0,
-                            "write_version": 0,
-                            "db_version": db_version,
-                            "db_version_prev": db_version_prev,
-                            "is_db_node": True
-                        }
-                
-            except Exception as e:
-                self._log(f"Error sincronizando desde {best_node}: {e}")
-        
-        self.global_index["db_nodes"].add(self.node_id)
-        self.global_index["version"] += 1
-        
-        self._log(f"Nodo {self.node_id} marcado como nodo de base de datos")
+        log_info("DB SYNC ON BECOME LEADER", 
+                f"Nodo líder iniciado como DB sin aviso de sincronización (db_version={db_version})", 
+                colorize_full=True, color="blue")
 
     def update_node_version(self, version_type: str, node_id: int = None):
         """
@@ -535,130 +665,7 @@ class RaftConsensusFunctions:
         elif version_type == "read":
             self.global_index["node_versions"][node_id]["read_version"] += 1
 
-    def add_pending_task(self, task_data: dict):
-        """Agrega una tarea pendiente al log y a la cola"""
-        with self._lock:
-            # task_entry = {
-            #     "type": "TASK_PENDING",
-            #     "task_id": str(uuid.uuid4()),
-            #     "timestamp": time.time(),
-            #     "request_data": task_data,
-            #     "assigned_nodes": {},
-            #     "status": "pending"
-            # }
-            # self.pending_tasks.append(task_entry)
-            
-            # # Agregar al log de Raft
-            # log_entry = LogEntry(
-            #     term=self.current_term,
-            #     command={"action": "task_pending", "task": task_entry}
-            # )
-            # self.log.append(log_entry)
-            return str(uuid.uuid4())
 
-    def update_task_status(self, task_id: str, status: str, result=None):
-        """Actualiza el estado de una tarea"""
-        with self._lock:
-            for task in self.pending_tasks:
-                if task["task_id"] == task_id:
-                    task["status"] = status
-                    if result:
-                        task["result"] = result
-                    
-                    # Agregar al log
-                    log_entry = LogEntry(
-                        term=self.current_term,
-                        command={
-                            "action": "task_update",
-                            "task_id": task_id,
-                            "status": status
-                        }
-                    )
-                    self.log.append(log_entry)
-                    
-                    # Si completó exitosamente, agregar al cache
-                    if status == "completed" and result:
-                        self._add_to_cache(task, result)
-                    
-                    return True
-            return False
-    
-    def _add_to_cache(self, task: dict, result: any):
-        """Agrega operación exitosa al cache (máximo 5)"""
-        cache_entry = {
-            "task_id": task["task_id"],
-            "request_data": task["request_data"],
-            "result": result,
-            "timestamp": time.time()
-        }
-        self.operation_cache.append(cache_entry)
-        
-        # Mantener solo las últimas 5
-        if len(self.operation_cache) > 5:
-            self.operation_cache.pop(0)
-
-    def get_from_cache(self, request_hash: str):
-        """Busca en el cache una operación previa"""
-        for entry in self.operation_cache:
-            if hash(str(entry["request_data"])) == hash(request_hash):
-                return entry["result"]
-        return None
-
-    #TODO: Hacer bien esta funcion
-    def process_pending_tasks(self):
-        """Procesa tareas pendientes (llamado cuando se vuelve líder)"""
-        with self._lock:
-            for task in self.pending_tasks:
-                if task["status"] == "pending":
-                    self._log(f"Retomando tarea pendiente: {task['task_id']}")
-                    # Aquí se retomaría la tarea
-                    # Esto lo manejará el TaskCoordinator hasta que sepa como poronga integrarlo
-
-    #TODO: Revisar bien esta funcion, ver como funciona con el task_coordinator, ver como integrar task_coordinator
-    def recover_pending_tasks_on_become_leader(self):
-        """
-        Recupera y procesa tareas pendientes cuando se convierte en líder.
-        Llamado desde become_leader.
-        """
-        self._log("Recuperando tareas pendientes del log...")
-        
-        with self._lock:
-            # Buscar tareas pendientes en el log
-            for log_entry in self.log:
-                if isinstance(log_entry.command, dict):
-                    action = log_entry.command.get("action")
-                    
-                    # Buscar tareas pendientes
-                    if action == "task_pending":
-                        task = log_entry.command.get("task")
-                        if task and task["status"] == "pending":
-                            # Verificar si no está ya en pending_tasks
-                            task_exists = any(
-                                t["task_id"] == task["task_id"] 
-                                for t in self.pending_tasks
-                            )
-                            
-                            if not task_exists:
-                                self.pending_tasks.append(task)
-                                self._log(f"Tarea recuperada: {task['task_id']}")
-                    
-                    # Actualizar estado de tareas
-                    elif action == "task_update":
-                        task_id = log_entry.command.get("task_id")
-                        new_status = log_entry.command.get("status")
-                        
-                        for task in self.pending_tasks:
-                            if task["task_id"] == task_id:
-                                task["status"] = new_status
-            
-            # Filtrar solo las pendientes
-            self.pending_tasks = [
-                t for t in self.pending_tasks 
-                if t["status"] == "pending"
-            ]
-            
-            self._log(f"Total de tareas pendientes: {len(self.pending_tasks)}")
-    
 class RaftServer:
     _lock = threading.Lock()
     _instance = None
@@ -854,19 +861,19 @@ class RaftServer:
             self.raft_instance.become_follower()
 
     def _send_heartbeats(self):
-        heartbeat_interval = HEARTBEAT_INTERVAL
-
+        import random
+        
         while True:
+            heartbeat_interval = random.uniform(HEARTBEAT_INTERVAL[0], HEARTBEAT_INTERVAL[1])  # ✅ Usar uniform
             time.sleep(heartbeat_interval)
-
+            
             if self.raft_instance.state != "leader":
                 continue
-
+                
             # # Detectar cambios en nodos activos
             # self._detect_node_state_changes()
-
             # self._cleanup_completed_tasks()
-
+            
             for client_node_id, client_host, client_port in self._get_client_nodes():
                 threading.Thread(
                     target=self._send_append_entries,
@@ -880,6 +887,7 @@ class RaftServer:
         if self.raft_instance.state != "leader":
             return
 
+        from raft.log_utils import log_info, log_error, log_warning
         try:
             client_server = self._get_client_server(
                 client_node_id, client_host, client_port, requires_validation=False
@@ -916,11 +924,17 @@ class RaftServer:
                 prev_log_term,
                 self.raft_instance.commit_index,
                 entries,
-                self.raft_instance.global_index, # parametro nuevo que es el indice del lider
+                self.raft_instance.global_index,
+                self.previous_active_nodes,
+                self.node_states
             ) 
 
             if self.raft_instance.state != "leader":
                 return
+
+            if response["global_index"]:
+                log_warning("RAFT SERVER", f"Nodo leader: {self.host} recibió global index de nodo {client_node_id}. Merge index...")
+                self.raft_instance._merge_index_info(response["global_index"])
 
             if response["success"]:
                 if entries:
@@ -937,14 +951,19 @@ class RaftServer:
                     )
                 elif prev_log_index == 0:
                     self.raft_instance.match_index[client_node_id] = 0
+                
+                if response["global_index"]:
+                    log_warning("RAFT SERVER", f"Nodo leader: {self.host} recibió global index de nodo {client_node_id} tras un heartbeat exitoso donde reescribio el suyo por el del lider. Merge index...")
+                    self.raft_instance._merge_index_info(response["global_index"])
             else:
-                if response["term"] > self.raft_instance.current_term:
-                    self.raft_instance._log(
+                if response["term"] >= self.raft_instance.current_term:
+                    log_warning( "RAFT SERVER",
                         f"Término superior descubierto {response['term']} desde nodo {client_node_id}, renunciando"
                     )
                     import logging
                     res_term = response['term']
                     logging.info(f"Término superior descubierto {res_term} desde nodo {client_node_id}, renunciando")
+                    # Copio mi indice, creo un cliente
                     self.raft_instance.become_follower(new_term=response["term"])
                 else:
                     old_next = next_idx
@@ -957,7 +976,7 @@ class RaftServer:
                         )
 
         except Exception as e:
-            self.raft_instance._log(
+            log_error( "RAFT SERVER",
                 f"Error al enviar AppendEntries a nodo {client_node_id}: {e}"
             )
             # self._set_node_status(client_node_id, False)
@@ -1025,3 +1044,4 @@ class RaftServer:
         ]
 
         return clients
+        

@@ -1,3 +1,4 @@
+// services/UploadService.js
 import ApiService from './ApiService'
 
 export default class UploadService {
@@ -17,7 +18,7 @@ export default class UploadService {
 
           // Usar ApiService para crear el track
           const response = await ApiService.createTrack(trackPayload)
-          resolve(response.data)
+          resolve(response)
         } catch (error) {
           reject(error)
         }
@@ -40,11 +41,42 @@ export default class UploadService {
 
   static async createArtist(artistData) {
     const response = await ApiService.createArtist(artistData)
-    return response.data
+    return response.data.data
   }
 
   static async createAlbum(albumData) {
     const response = await ApiService.createAlbum(albumData)
+    return response.data.data
+  }
+
+  static async updateTrack(id, trackData) {
+    try {
+      const response = await ApiService.updateTrack(id, trackData)
+          return response.data.data
+
+    }
+    catch (error){
+      console.log("Error actualizando: " + error)
+    }
+  }
+
+    static async deleteArtist(artistId) {
+    if (!artistId) {
+      throw new Error('artistId es obligatorio')
+    }
+
+    const response = await ApiService.deleteArtist(artistId)
     return response.data
   }
+
+  static async deleteAlbum(albumId) {
+    if (!albumId) {
+      throw new Error('albumId es obligatorio')
+    }
+
+    const response = await ApiService.deleteAlbum(albumId)
+    return response.data
+  }
+
 }
+

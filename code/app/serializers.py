@@ -1,3 +1,4 @@
+# code/app/serializers.py
 import io
 import os
 import uuid
@@ -52,12 +53,18 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         
         try:
             data = super().validate(attrs)
-            logger.info("✅ super().validate() EXITOSO")
+            import json
+            data_info = json.dumps(data)
+            logger.info(f"✅ super().validate() EXITOSO con data: {data_info}")
         except Exception as e:
             logger.error(f"❌ ERROR en super().validate(): {str(e)}")
             raise
         
-        # Resto del código...
+        logger.info(f"User id {str(user.id)}")
+        send_user = UserSerializer(user).data
+        import random
+        send_user["id"] = "USER_" + str(random.randint(1_000_000_000, 9_999_999_999))
+        data["user"] = send_user
         return data
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -67,6 +74,10 @@ class RegisterSerializer(serializers.ModelSerializer):
         style={'input_type': 'password'},
         min_length=8
     )
+
+    username = serializers.CharField(
+        required=True,
+    )
     
     class Meta:
         model = User
@@ -75,49 +86,38 @@ class RegisterSerializer(serializers.ModelSerializer):
             'first_name', 'last_name'
         ]
     
-    def create(self, validated_data):
-        import logging
-        logger = logging.getLogger(__name__)
+    # def create(self, validated_data):
+    #     import logging
+    #     logger = logging.getLogger(__name__)
         
-        logger.info(f"[REGISTER] Creando usuario: {validated_data.get('username')}")
+    #     logger.info(f"[REGISTER] Creando usuario: {validated_data.get('username')}")
         
-        # Extraer la contraseña
-        password = validated_data.pop('password')
-        logger.info(f"[REGISTER] Password recibido: {password[:3]}... (len: {len(password)})")
+    #     # Extraer la contraseña
+    #     password = validated_data.pop('password')
         
-        # Crear usuario sin contraseña
-        user = User.objects.create(**validated_data)
-        logger.info(f"[REGISTER] Usuario creado: {user.username}")
+    #     # ✅ CONVERTIR EMAIL VACÍO A NULL
+    #     if 'email' in validated_data and not validated_data['email']:
+    #         validated_data['email'] = None
         
-        # DEBUG: Ver estado antes de set_password
-        logger.info(f"[REGISTER] Password antes de set_password: {user.password}")
+    #     logger.info(f"[REGISTER] Password recibido: {password[:3]}... (len: {len(password)})")
         
-        # Establecer contraseña con hashing
-        user.set_password(password)
-        user.save()
+    #     # Crear usuario sin contraseña
+    #     # user = User.objects.create(**validated_data)
+    #     # logger.info(f"[REGISTER] Usuario creado: {user.username}")
         
-        # DEBUG: Ver estado después de set_password
-        logger.info(f"[REGISTER] Password después de set_password: {user.password[:80]}...")
-        logger.info(f"[REGISTER] ¿Es hash pbkdf2? {user.password.startswith('pbkdf2_')}")
+    #     # Establecer contraseña con hashing
+    #     # user.set_password(password)
+    #     # user.save()
         
-        # Verificar inmediatamente
-        from django.contrib.auth.hashers import check_password
-        check_result = check_password(password, user.password)
-        logger.info(f"[REGISTER] check_password verificación: {check_result}")
+    #     logger.info(f"[REGISTER] Password después de set_password: {user.password[:80]}...")
         
-        if not check_result:
-            logger.error(f"[REGISTER] ERROR: set_password NO funcionó para {user.username}")
-            # Fallback manual
-            from django.contrib.auth.hashers import make_password
-            user.password = make_password(password)
-            user.save()
-            logger.info(f"[REGISTER] Hash aplicado manualmente")
+    #     # Generar token de verificación solo si hay email
+    #     if user.email:
+    #         user.generate_verification_token()
         
-        # Generar token de verificación
-        user.generate_verification_token()
-        
-        logger.info(f"[REGISTER] Usuario {user.username} creado exitosamente")
-        return user
+    #     logger.info(f"[REGISTER] Usuario {user.username} creado exitosamente")
+    #     user.id = str(user.id)
+    #     return user
     
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -205,7 +205,7 @@ class AudioStreamerSerializer(serializers.Serializer):
                 track = Track.objects.get(id=audio_id)
 
                 # Archivo en nodos (info del índice)
-                file_info = leader_manager._get_file_info_from_index(audio_id) or {}
+                total_chunks = leader_manager._get_file_info_from_index(audio_id) or 0
 
                 response["metadata"] = {
                     "id": track.id,
@@ -219,10 +219,7 @@ class AudioStreamerSerializer(serializers.Serializer):
                     "bitrate": track.bitrate,
 
                     # del índice distribuido (si están)
-                    "file_size": file_info.get("size", 0),
-                    "total_chunks": file_info.get("total_chunks", 0),
-                    "channels": file_info.get("channels", 2),
-                    "sample_rate": file_info.get("sample_rate", None),
+                    "total_chunks": total_chunks,
 
                     # fijo del sistema
                     "chunk_size": CHUNK_SIZE,
@@ -248,7 +245,6 @@ class ArtistSerializer(serializers.ModelSerializer):
             validated_data["id"] = str(uuid.uuid4())
         return super().create(validated_data)
 
-
 class AlbumSerializer(serializers.ModelSerializer):
     class Meta:
         model = Album
@@ -266,11 +262,10 @@ class AlbumSerializer(serializers.ModelSerializer):
             validated_data["id"] = str(uuid.uuid4())
         return super().create(validated_data)
 
-
 class TrackSerializer(serializers.ModelSerializer):
     file_base64 = serializers.CharField(write_only=True, required=False)
-    album_name = serializers.SerializerMethodField()
-    artist_names = serializers.SerializerMethodField()
+    album_name = serializers.SerializerMethodField(required=False)
+    artist_names = serializers.SerializerMethodField(required=False)
     
     # Cambiar artist para aceptar lista de IDs en lugar de objetos
     artist = serializers.PrimaryKeyRelatedField(
@@ -332,5 +327,50 @@ class TrackSerializer(serializers.ModelSerializer):
     
     def get_artist_names(self, obj):
         return [artist.name for artist in obj.artist.all()]
-    
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

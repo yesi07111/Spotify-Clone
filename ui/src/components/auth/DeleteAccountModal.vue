@@ -40,6 +40,7 @@
 
 <script>
 import AuthService from '@/services/AuthService'
+import { UIState } from '@/store/ui';
 
 export default {
   name: 'DeleteAccountModal',
@@ -74,36 +75,38 @@ export default {
       this.error = null
     },
     
-    async handleDeleteAccount() {
-      if (!this.password) {
-        alert('Por favor ingresa tu contraseña')
-        return
-      }
-      
-      this.isLoading = true
-      this.error = null
-      
-      try {
-        // Aquí deberías llamar a tu API para eliminar la cuenta
-        const response = await AuthService.deleteAccount({
-          password: this.password
-        })
-        
-        if (response.success) {
-          this.$emit('success', 'Cuenta eliminada exitosamente')
-          this.resetForm()
-        } else {
-          this.error = response.message || 'Error al eliminar la cuenta'
-          alert(this.error)
-        }
-      } catch (error) {
-        console.error('Error deleting account:', error)
-        this.error = error.message || 'Ocurrió un error al eliminar la cuenta'
-        alert(this.error)
-      } finally {
-        this.isLoading = false
-      }
+  async handleDeleteAccount() {
+    if (!this.password) {
+      alert('Por favor ingresa tu contraseña')
+      return
     }
+    
+    this.isLoading = true
+    this.error = null
+    
+    try {
+      await AuthService.deleteAccount()
+      
+      console.log('✅ Cuenta eliminada exitosamente')
+      
+      // Cerrar modal Y actualizar UIState
+      this.$emit('close')
+      this.$emit('success', 'Cuenta eliminada exitosamente')
+      
+      // Limpiar autenticación
+      UIState.isAuthenticated = false
+      UIState.currentUser = null
+      
+      this.resetForm()
+    } catch (error) {
+      console.error('❌ Error deleting account:', error)
+      this.error = error.response?.data?.detail || 'Error al eliminar la cuenta'
+      alert(this.error)
+    } finally {
+      this.isLoading = false
+    }
+  }
+
   }
 }
 </script>
@@ -198,7 +201,7 @@ export default {
 
 .form-input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: var(--color-primary);
 }
 
 .form-actions {

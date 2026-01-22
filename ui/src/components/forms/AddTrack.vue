@@ -1,4 +1,4 @@
-<!-- AddTrack -->
+<!-- components/forms/AddTrack.vue -->
 <template>
   <div class="add-track-form card p-3 bg-dark text-white">
     <h5 class="mb-3">Subir Canción</h5>
@@ -214,12 +214,27 @@ export default {
           this.successMessage = `Artista "${existingArtist.name}" seleccionado`
         } else {
           // Si no existe, crear nuevo
-          const newArtist = await UploadService.createArtist({ name: this.newArtistName })
-          this.artists.push(newArtist)
-          this.artistIds = [newArtist.id]
-          this.newArtistName = ''
-          this.showNewArtist = false
-          this.successMessage = `Artista "${newArtist.name}" creado exitosamente`
+          try{
+            const newArtist = await UploadService.createArtist({ name: this.newArtistName })
+            
+            if (newArtist)
+          {
+            console.log("[Artist] Veamos el artista")
+            console.table(newArtist)
+            this.artists.push(newArtist)
+            this.artistIds = [newArtist.id]
+            this.newArtistName = ''
+            this.showNewArtist = false
+            this.successMessage = `Artista "${newArtist.name}" creado exitosamente`
+          }
+            
+          }
+          catch (err) 
+          {
+            console.log("No se creo el artista: " + err)
+          }
+          
+          
         }
         
         // Limpiar mensaje después de 3 segundos
@@ -231,15 +246,116 @@ export default {
         console.error('findOrCreateArtist error', err)
       }
     },
+
+    async convertFileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const base64 = reader.result.split(',')[1] || ''
+          resolve(base64)
+        }
+        reader.onerror = (e) => reject(e)
+        reader.readAsDataURL(file)
+      })
+    },
     
-    async findOrCreateAlbum() {
-      if (!this.newAlbumName.trim()) {
-        this.errorMessage = 'Por favor ingresa un nombre para el álbum'
+    
+
+    // Solo cambios en el método submitForm de AddTrack.vue:
+    
+    async submitForm() {
+      this.errorMessage = null
+      this.successMessage = null
+
+      // Validaciones (solo título y archivo obligatorios)
+      if (!this.title || !this.file) {
+        this.errorMessage = 'El título y el archivo son obligatorios'
         return
       }
 
-      if (this.artistIds.length === 0) {
-        this.errorMessage = 'Primero debes seleccionar o crear un artista para el álbum'
+      this.submitting = true
+
+      try {
+        let finalArtistIds = [...this.artistIds]
+        let finalAlbumId = this.albumId
+
+        // Crear nuevo artista si es necesario
+        if (this.showNewArtist && this.newArtistName) {
+          const existingArtist = this.artists.find(
+            artist => artist.name.toLowerCase() === this.newArtistName.toLowerCase()
+          )
+
+          if (existingArtist) {
+            finalArtistIds = [existingArtist.id]
+          } else {
+            const newArtist = await UploadService.createArtist({ name: this.newArtistName })
+            finalArtistIds = [newArtist.id]
+            this.artists.push(newArtist)
+          }
+        }
+
+        // Crear nuevo álbum si es necesario (permite null en author)
+        if (this.showNewAlbum && this.newAlbumName) {
+          const existingAlbum = this.albums.find(
+            album => album.name.toLowerCase() === this.newAlbumName.toLowerCase()
+          )
+
+          if (existingAlbum) {
+            finalAlbumId = existingAlbum.id
+          } else {
+            const newAlbum = await UploadService.createAlbum({
+              name: this.newAlbumName,
+              date: new Date().toISOString().split('T')[0],
+              author: finalArtistIds.length > 0 ? finalArtistIds[0] : null  // Permite null
+            })
+            finalAlbumId = newAlbum.id
+            this.albums.push(newAlbum)
+          }
+        }
+
+        const fileBase64 = await this.convertFileToBase64(this.file)
+        const trackData = {
+          title: this.title,
+          album: finalAlbumId,  // Puede ser null
+          artist: finalArtistIds.length > 0 ? finalArtistIds : [],  // Puede ser array vacío
+          file_base64: fileBase64
+        }
+
+        const created = await UploadService.uploadTrack(this.file, trackData)
+        
+        if ("error" in created.data)
+        {
+          this.errorMessage = 'Error: ' + created.data["error"]
+        }
+        else
+        {
+          this.successMessage = '¡Canción subida exitosamente!'
+          this.resetFormFields()
+        }
+        
+        
+        try {
+          await this.refreshSongs()
+        } catch (err) {
+          console.error('refreshSongs failed', err)
+        }
+        
+        // this.$emit('created', created)
+        
+      } catch (err) {
+        console.log("[ERROR EN TRACK]:")
+        console.table(err)
+        this.errorMessage = 'Error al subir la canción: ' + (err.response?.data?.message || err.message)
+        console.error('submitForm error', err)
+      } finally {
+        this.submitting = false
+      }
+    },
+
+    // También modificar findOrCreateAlbum para permitir null en author:
+    async findOrCreateAlbum() {
+      if (!this.newAlbumName.trim()) {
+        this.errorMessage = 'Por favor ingresa un nombre para el álbum'
         return
       }
 
@@ -256,11 +372,11 @@ export default {
           this.showNewAlbum = false
           this.successMessage = `Álbum "${existingAlbum.name}" seleccionado`
         } else {
-          // Si no existe, crear nuevo
+          // Si no existe, crear nuevo (permite null en author)
           const newAlbum = await UploadService.createAlbum({
             name: this.newAlbumName,
             date: new Date().toISOString().split('T')[0],
-            author: this.artistIds[0] // Usar el primer artista
+            author: this.artistIds.length > 0 ? this.artistIds[0] : null  // Permite null
           })
           this.albums.push(newAlbum)
           this.albumId = newAlbum.id
@@ -269,7 +385,6 @@ export default {
           this.successMessage = `Álbum "${newAlbum.name}" creado exitosamente`
         }
         
-        // Limpiar mensaje después de 3 segundos
         setTimeout(() => {
           this.successMessage = null
         }, 3000)
@@ -278,127 +393,7 @@ export default {
         console.error('findOrCreateAlbum error', err)
       }
     },
-  
-    async convertFileToBase64(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const base64 = reader.result.split(',')[1] || ''
-          resolve(base64)
-        }
-        reader.onerror = (e) => reject(e)
-        reader.readAsDataURL(file)
-      })
-    },
-    
-    async submitForm() {
-      this.errorMessage = null
-      this.successMessage = null
 
-      // Validaciones
-      if (!this.title || !this.file) {
-        this.errorMessage = 'El título y el archivo son obligatorios'
-        return
-      }
-
-      if (this.showNewArtist && !this.newArtistName) {
-        this.errorMessage = 'Debes crear un nuevo artista o seleccionar uno existente'
-        return
-      }
-
-      if (!this.showNewArtist && this.artistIds.length === 0) {
-        this.errorMessage = 'Debes seleccionar al menos un artista'
-        return
-      }
-
-      if (this.showNewAlbum && !this.newAlbumName) {
-        this.errorMessage = 'Debes crear un nuevo álbum o seleccionar uno existente'
-        return
-      }
-
-      if (!this.showNewAlbum && !this.albumId) {
-        this.errorMessage = 'Debes seleccionar un álbum'
-        return
-      }
-
-      this.submitting = true
-
-      try {
-        let finalArtistIds = [...this.artistIds]
-        let finalAlbumId = this.albumId
-
-        // Crear nuevo artista si es necesario (con búsqueda primero)
-        if (this.showNewArtist && this.newArtistName) {
-          const existingArtist = this.artists.find(
-            artist => artist.name.toLowerCase() === this.newArtistName.toLowerCase()
-          )
-
-          if (existingArtist) {
-            finalArtistIds = [existingArtist.id]
-          } else {
-            const newArtist = await UploadService.createArtist({ name: this.newArtistName })
-            finalArtistIds = [newArtist.id]
-            this.artists.push(newArtist)
-          }
-        }
-
-        // Crear nuevo álbum si es necesario (con búsqueda primero)
-        if (this.showNewAlbum && this.newAlbumName) {
-          if (finalArtistIds.length === 0) {
-            throw new Error('Necesitas al menos un artista para crear un álbum')
-          }
-
-          const existingAlbum = this.albums.find(
-            album => album.name.toLowerCase() === this.newAlbumName.toLowerCase()
-          )
-
-          if (existingAlbum) {
-            finalAlbumId = existingAlbum.id
-          } else {
-            const newAlbum = await UploadService.createAlbum({
-              name: this.newAlbumName,
-              date: new Date().toISOString().split('T')[0],
-              author: finalArtistIds[0]
-            })
-            finalAlbumId = newAlbum.id
-            this.albums.push(newAlbum)
-          }
-        }
-
-        const fileBase64 = await this.convertFileToBase64(this.file)
-        const trackData = {
-          title: this.title,
-          album: finalAlbumId,
-          artist: finalArtistIds,
-          file_base64: fileBase64
-        }
-
-        const created = await UploadService.uploadTrack(this.file, trackData)
-        
-        this.successMessage = '¡Canción subida exitosamente!'
-        this.resetFormFields()
-        
-        try {
-          await this.refreshSongs()
-        } catch (err) {
-          console.error('refreshSongs failed', err)
-        }
-        
-        this.$emit('created', created)
-        
-        // Cerrar automáticamente después de 2 segundos
-        setTimeout(() => {
-          this.$emit('created')
-        }, 2000)
-        
-      } catch (err) {
-        this.errorMessage = 'Error al subir la canción: ' + (err.response?.data?.message || err.message)
-        console.error('submitForm error', err)
-      } finally {
-        this.submitting = false
-      }
-    },
-    
     resetForm() {
       this.resetFormFields()
       this.errorMessage = null

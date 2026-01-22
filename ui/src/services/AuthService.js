@@ -3,8 +3,6 @@ import axios from 'axios'
 import CryptoJS from 'crypto-js'
 
 const API_BASE_URL = process.env.VUE_APP_API_URL || 'https://127.0.0.1:8000/api'
-
-// Configuración de cifrado (en producción debería ser una variable de entorno)
 const ENCRYPTION_KEY = process.env.VUE_APP_ENCRYPTION_KEY || 'spotify-clone-distribuido-2024-seguridad'
 const TOKEN_KEY = 'spotify_auth_token'
 const USER_KEY = 'spotify_user_data'
@@ -77,7 +75,7 @@ authClient.interceptors.request.use(
         
         if (token && token.access) {
             console.log('[AUTH DEBUG] Agregando Authorization header')
-            config.headers.Authorization = `Bearer ${token.access}`
+            config.headers.Authorization ||= `Bearer ${token.access}`
         } else {
             console.log('[AUTH DEBUG] NO hay token disponible')
         }
@@ -91,27 +89,26 @@ authClient.interceptors.request.use(
     }
 )
 
-// Interceptor para agregar token a las peticiones
-authClient.interceptors.request.use(
-    (config) => {
-        const token = secureStorage.getItem(TOKEN_KEY)
-        if (token) {
-            config.headers.Authorization = `Bearer ${token.access}`
-        }
-        return config
-    },
-    (error) => {
-        return Promise.reject(error)
-    }
-)
 
-// Interceptor para manejar tokens expirados
+// En services/AuthService.js - Modifica el interceptor de respuestas
 authClient.interceptors.response.use(
     (response) => response,
     async (error) => {
         const originalRequest = error.config
         
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        // Silenciar errores 401 para rutas específicas
+        const silent401Paths = ['/auth/logout/', '/auth/token/verify/']
+        const isSilentPath = silent401Paths.some(path => 
+            originalRequest.url?.includes(path)
+        )
+        
+        if (isSilentPath && error.response?.status === 401) {
+            console.log('[AUTH] Petición no autenticada (esperado)')
+            return Promise.resolve({ data: { silent: true } })
+        }
+        
+        // Manejo de refresh token (solo si no es una ruta silenciosa)
+        if (error.response?.status === 401 && !originalRequest._retry && !isSilentPath) {
             originalRequest._retry = true
             
             try {
@@ -131,10 +128,13 @@ authClient.interceptors.response.use(
                     return authClient(originalRequest)
                 }
             } catch (refreshError) {
-                // Si el refresh token expiró, cerrar sesión
-                secureStorage.clear()
-                return Promise.reject(refreshError)
+                console.log('[AUTH] Refresh token expirado - cerrando sesión silenciosamente')
             }
+        }
+        
+        // Para otros errores, podemos decidir si mostrar o no
+        if (error.response?.status >= 500) {
+            console.error('[API] Error del servidor:', error.message)
         }
         
         return Promise.reject(error)
@@ -167,7 +167,6 @@ export default {
     },
     
     // Login de usuario
-    // Login de usuario - Versión mejorada
     async login(credentials) {
         try {
             console.log('[LOGIN DEBUG] Credenciales recibidas:', {
@@ -224,6 +223,36 @@ export default {
     getToken() {
         return secureStorage.getItem(TOKEN_KEY)
     },
+
+    // Refrescar token (USADO POR ApiService)
+    async refreshToken() {
+    const token = secureStorage.getItem(TOKEN_KEY)
+
+    if (!token || !token.refresh) {
+        throw new Error('No refresh token disponible')
+    }
+
+    // ⚠️ IMPORTANTE: request SIN Authorization header
+    const refreshClient = axios.create({
+        baseURL: API_BASE_URL,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        withCredentials: true
+    })
+
+    const response = await refreshClient.post('/auth/token/refresh/', {
+        refresh: token.refresh
+    })
+
+    const newToken = {
+        ...token,
+        access: response.data.access
+    }
+
+    secureStorage.setItem(TOKEN_KEY, newToken)
+    return response.data.access
+    },
     
     // Verificar si está autenticado
     isAuthenticated() {
@@ -242,15 +271,14 @@ export default {
     
     // Cambiar contraseña
     async changePassword(passwordData) {
-        const hashedCurrent = CryptoJS.SHA256(passwordData.current_password).toString()
-        const hashedNew = CryptoJS.SHA256(passwordData.new_password).toString()
-        
+
         return await authClient.post('/auth/change-password/', {
-            current_password: hashedCurrent,
-            new_password: hashedNew
-        })
+        current_password: passwordData.current_password,
+        new_password: passwordData.new_password
+    })
     },
     
+
     // Eliminar cuenta
     async deleteAccount() {
         const response = await authClient.delete('/auth/delete-account/')
@@ -258,3 +286,4 @@ export default {
         return response.data
     }
 }
+

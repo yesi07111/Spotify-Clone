@@ -42,10 +42,10 @@
     
     <!-- Modal para eliminar cuenta -->
     <DeleteAccountModal
-      v-if="showDeleteAccountModal"
-      @close="closeDeleteAccountModal"
-      @success="handleAccountDeleteSuccess"
-    />
+    :is-visible="showDeleteAccountModal"
+    @close="showDeleteAccountModal = false"
+    @success="handleAccountDeleteSuccess"
+  />
   </nav>
 </template>
 
@@ -55,6 +55,7 @@ import AuthModal from '@/components/auth/AuthModal.vue'
 import UserProfile from '@/components/auth/UserProfile.vue'
 import ChangePasswordModal from '@/components/auth/ChangePasswordModal.vue'
 import DeleteAccountModal from '@/components/auth/DeleteAccountModal.vue'
+import { UIState } from '@/store/ui'
 
 export default {
   name: 'NavigationBar',
@@ -72,9 +73,12 @@ export default {
     }
   },
   computed: {
+    // isAuthenticated() {
+    //   return AuthService.isAuthenticated()
+    // }
     isAuthenticated() {
-      return AuthService.isAuthenticated()
-    }
+    return UIState.isAuthenticated
+  }
   },
   methods: {
     openAuthModal() {
@@ -102,13 +106,26 @@ export default {
     },
     
     handleAuthSuccess(message) {
-      console.log(message)
-      this.showAuthModal = false
-    },
+  console.log(message)
+  this.showAuthModal = false
+
+  if (this._loginProcessed) return
+  this._loginProcessed = true
+
+  // Actualiza UIState reactivo
+  UIState.isAuthenticated = true
+  UIState.currentUser = AuthService.getCurrentUser()
+
+  // 🔹 NO recargar la página
+  // Vue reaccionará automáticamente y mostrará UserProfile
+},
+
     
     handleLogoutSuccess() {
-      console.log('Sesión cerrada exitosamente')
-    },
+  console.log('Sesión cerrada exitosamente')
+  UIState.isAuthenticated = false
+  UIState.currentUser = null
+},
     
     handlePasswordChangeSuccess(message) {
       alert(message)
@@ -116,11 +133,17 @@ export default {
     },
     
     handleAccountDeleteSuccess(message) {
-      alert(message)
-      this.showDeleteAccountModal = false
-      window.location.reload()
-    }
-  }
+  alert(message)
+  this.showDeleteAccountModal = false
+  
+
+  // Actualiza UIState reactivo
+  console.log('ANTES', UIState.isAuthenticated)
+UIState.isAuthenticated = false
+console.log('DESPUÉS', UIState.isAuthenticated)
+  UIState.currentUser = null
+}
+  },
 }
 </script>
 
@@ -145,7 +168,7 @@ export default {
 }
 
 .navigation-brand-icon {
-  color: #1db954;
+  color: var(--color-primary);
   font-size: 2rem;
 }
 
@@ -159,7 +182,7 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 10px 20px;
-  background: linear-gradient(135deg, #1db954 0%, #1ed760 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
   color: white;
   border: none;
   border-radius: 50px;
@@ -171,7 +194,7 @@ export default {
 
 .btn-login:hover {
   transform: scale(1.05);
-  box-shadow: 0 4px 15px rgba(29, 185, 84, 0.4);
+  box-shadow: 0 4px 15px rgba(57, 74, 228, 0.4);
 }
 
 .btn-login i {

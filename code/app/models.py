@@ -1,3 +1,4 @@
+# code/app/models.py
 from django.db import models
 import uuid
 import hashlib
@@ -32,7 +33,7 @@ class UserManager(BaseUserManager):
         return self.create_user(username, password, **extra_fields)
 
 class User(AbstractBaseUser, PermissionsMixin):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.CharField(primary_key=True, default="string", editable=False, max_length=36)
     username = models.CharField(
         max_length=50,
         unique=True,
@@ -43,7 +44,7 @@ class User(AbstractBaseUser, PermissionsMixin):
             )
         ]
     )
-    email = models.EmailField(unique=True, blank=True, null=True)
+    email = models.EmailField(unique=False, blank=True, null=True)
     
     # Información personal
     first_name = models.CharField(max_length=30, blank=True)
@@ -113,9 +114,12 @@ class User(AbstractBaseUser, PermissionsMixin):
         self.refresh_token_version += 1
         self.save()
     
+    
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}".strip()
+
+
 
 class Artist(models.Model):
     id = models.CharField(max_length=100, primary_key=True)
@@ -139,7 +143,7 @@ class Album(models.Model):
     id = models.CharField(max_length=100, primary_key=True)
     name = models.CharField(max_length=100)
     date = models.DateField()
-    author = models.ForeignKey(to=Artist, null=True, on_delete=models.DO_NOTHING)
+    author = models.ForeignKey(to=Artist, null=True, on_delete=models.SET_NULL)
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -157,7 +161,7 @@ class Album(models.Model):
 class Track(models.Model):
     id = models.CharField(max_length=100, primary_key=True)
     title = models.CharField(max_length=100, null=True)
-    album = models.ForeignKey(to=Album, null=True, on_delete=models.DO_NOTHING)
+    album = models.ForeignKey(to=Album, null=True, on_delete=models.SET_NULL)
     artist = models.ManyToManyField(to=Artist, blank=True)
     duration_seconds = models.IntegerField(null=False)
     bitrate = models.IntegerField(null=False)
@@ -176,3 +180,4 @@ class Track(models.Model):
     
     class Meta:
         ordering = ['-title']
+

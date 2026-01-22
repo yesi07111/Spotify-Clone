@@ -8,7 +8,8 @@
       >
       <div class="current-track-title">{{ currentSong.title }}</div>
       <div class="current-track-details">
-        {{ Array.isArray(currentSong.artist_names) ? currentSong.artist_names.join(', ') : '' }} • {{ currentSong.album_name }}
+
+        {{ currentSong.artist_names ? currentSong.artist_names : '' }} • {{ currentSong.album_name }}
       </div>
     </div>
     

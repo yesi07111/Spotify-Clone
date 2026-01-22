@@ -200,110 +200,129 @@ const actions = {
     return playlistManager
   },
 
-  async selectTrack({ commit, state, dispatch }, track) {
-  console.log('🎵 [selectTrack] === SELECCIONANDO CANCIÓN ===', {
+async selectTrack({ commit, state, dispatch }, track) {
+  console.log('[selectTrack] === SELECCIONANDO CANCIÓN ===', {
     trackId: track?.id,
     trackTitle: track?.title,
     currentTrackId: state.currentSong?.id,
     isCurrentlyPlaying: state.isPlaying,
     isLoading: state.loadingTrack,
     repeatMode: state.repeatMode
-  });
+  })
 
+  // Validación básica de la canción
   if (!track || !track.id) {
-    console.error('❌ [selectTrack] CANCIÓN NO VÁLIDA proporcionada:', track);
-    return;
+    console.error('[selectTrack] CANCIÓN NO VÁLIDA proporcionada:', track)
+    return
   }
 
-  // 🔥 CONTROL MEJORADO: Misma canción ya cargada (INCLUYE CASOS DE REPEAT)
-  if (state.currentSong.id === track.id && state.audioService && 
-      state.audioService.currentTrackId === track.id && 
-      state.audioService.howl && !state.loadingTrack) {
-    
-    console.log('🔁 [selectTrack] MISMA CANCIÓN ya cargada - Reiniciando sin recargar', {
+  /*
+   * CASO 1: La misma canción ya está cargada en el servicio.
+   * No se vuelve a cargar audio ni se toca el estado de loading.
+   * El store decide explícitamente si debe reproducirse.
+   */
+  if (
+    state.currentSong.id === track.id &&
+    state.audioService &&
+    state.audioService.currentTrackId === track.id &&
+    state.audioService.howl &&
+    !state.loadingTrack
+  ) {
+    console.log('[selectTrack] Misma canción ya cargada - reutilizando audio existente', {
       isPlaying: state.isPlaying,
       repeatMode: state.repeatMode
-    });
-    
-    // 🔥 ACTUALIZAR UI INMEDIATAMENTE - NO MOSTRAR CARGA
-    commit('SET_CURRENT_SONG', track);
-    
-    // 🔥 REINICIAR REPRODUCCIÓN SIN ACTIVAR ESTADO DE CARGA
-    if (state.audioService.howl) {
-      console.log('⏪ [selectTrack] Reiniciando canción actual desde el inicio');
-      
-      // Pequeña pausa antes de reiniciar para evitar conflicto
-      setTimeout(() => {
-        if (state.audioService && state.audioService.howl) {
-          state.audioService.howl.seek(0);
-          if (!state.isPlaying) {
-            state.audioService.howl.play();
-            commit('SET_PLAYING_STATE', true);
-          }
-          console.log('✅ [selectTrack] Canción reiniciada exitosamente');
+    })
+
+    // Asegurar que la UI refleje la canción actual
+    commit('SET_CURRENT_SONG', track)
+
+    // Reiniciar la posición al inicio
+    setTimeout(() => {
+      if (state.audioService && state.audioService.howl) {
+        console.log('[selectTrack] Reiniciando canción desde el inicio')
+        state.audioService.howl.seek(0)
+
+        // El store ordena reproducir si no estaba sonando
+        if (!state.isPlaying) {
+          state.audioService.play()
+          commit('SET_PLAYING_STATE', true)
         }
-      }, 100);
-    }
-    
-    return;
+
+        console.log('[selectTrack] Canción reiniciada correctamente')
+      }
+    }, 100)
+
+    return
   }
 
   try {
-    console.log('🚀 [selectTrack] INICIANDO PROCESO DE CARGA...', {
+    console.log('[selectTrack] Iniciando proceso de carga de canción', {
       isDifferentTrack: state.currentSong.id !== track.id
-    });
-    
-    // 🔥 SOLO ACTIVAR CARGA SI ES UNA CANCIÓN DIFERENTE
-    if (state.currentSong.id !== track.id) {
-      commit('SET_LOADING_TRACK', true);
-      commit('SET_CHUNKS_PROGRESS', { loaded: 0, total: 0, progress: 0 });
-    }
-    
-    commit('SET_CURRENT_SONG', track);
-    commit('SET_PLAYING_STATE', false);
+    })
 
+    /*
+     * Solo se muestra estado de carga si realmente es una canción distinta.
+     * Esto evita parpadeos de loading cuando se reutiliza caché.
+     */
+    if (state.currentSong.id !== track.id) {
+      commit('SET_LOADING_TRACK', true)
+      commit('SET_CHUNKS_PROGRESS', { loaded: 0, total: 0, progress: 0 })
+    }
+
+    // Actualizar canción actual en el store (UI)
+    commit('SET_CURRENT_SONG', track)
+
+    // Inicializar servicios si aún no existen
     if (!state.audioService) {
-      console.log('🔧 [selectTrack] Inicializando servicio de audio...');
-      await dispatch('initializeAudioService');
+      console.log('[selectTrack] Inicializando AudioPlayerService')
+      await dispatch('initializeAudioService')
     }
 
     if (!state.playlistManager) {
-      console.log('📋 [selectTrack] Inicializando gestor de playlist...');
-      await dispatch('initializePlaylistManager');
+      console.log('[selectTrack] Inicializando PlaylistManager')
+      await dispatch('initializePlaylistManager')
     }
 
-    console.log('🎯 [selectTrack] Estableciendo canción actual en playlist manager...');
-    state.playlistManager.setCurrentSong(track.id);
+    console.log('[selectTrack] Estableciendo canción actual en el playlist manager')
+    state.playlistManager.setCurrentSong(track.id)
 
-    console.log('▶️ [selectTrack] Iniciando reproducción a través del servicio de audio...');
-    const success = await state.audioService.start(track.id, state.volume);
+    /*
+     * start() únicamente carga y prepara el audio.
+     * No reproduce automáticamente.
+     */
+    console.log('[selectTrack] Cargando audio a través del AudioPlayerService')
+    const success = await state.audioService.start(track.id, state.volume)
 
     if (success) {
-      console.log('✅ [selectTrack] Servicio de audio iniciado exitosamente');
-      commit('SET_PLAYING_STATE', true);
-      
-      // 🔥 DESACTIVAR CARGA INMEDIATAMENTE SI SE USÓ CACHÉ
-      if (state.currentSong.id === track.id && state.audioService.howl) {
-        console.log('💨 [selectTrack] Desactivando estado de carga - usando caché');
-        commit('SET_LOADING_TRACK', false);
+      console.log('[selectTrack] Audio cargado correctamente, iniciando reproducción')
+
+      // El store decide explícitamente reproducir
+      state.audioService.play()
+      commit('SET_PLAYING_STATE', true)
+
+      // Si se reutilizó caché, el loading se desactiva inmediatamente
+      if (state.audioService.howl) {
+        commit('SET_LOADING_TRACK', false)
       }
     } else {
-      console.warn('⚠️ [selectTrack] Servicio de audio no pudo iniciarse');
-      commit('SET_PLAYING_STATE', false);
-      commit('SET_LOADING_TRACK', false);
+      console.warn('[selectTrack] El AudioPlayerService no pudo iniciar la canción')
+      commit('SET_PLAYING_STATE', false)
+      commit('SET_LOADING_TRACK', false)
     }
 
   } catch (error) {
-    console.error('❌ [selectTrack] ERROR durante selección de canción:', error);
-    commit('SET_PLAYING_STATE', false);
-    commit('SET_LOADING_TRACK', false);
+    console.error('[selectTrack] ERROR durante la selección de canción:', error)
+    commit('SET_PLAYING_STATE', false)
+    commit('SET_LOADING_TRACK', false)
+
   } finally {
-    console.log('🏁 [selectTrack] Proceso de selección completado', {
+    console.log('[selectTrack] Proceso de selección finalizado', {
       currentTrackId: state.currentSong.id,
       isLoading: state.loadingTrack
-    });
+    })
   }
 },
+
 
   togglePlayback({ state, commit }) {
     if (!state.audioService || state.loadingTrack) {
@@ -311,8 +330,15 @@ const actions = {
     }
 
     try {
-      state.audioService.playAndPause()
-      commit('SET_PLAYING_STATE', state.audioService.isPlaying)
+      const shouldPlay = !state.isPlaying
+
+      if (shouldPlay) {
+        state.audioService.play()
+      } else {
+        state.audioService.pause()
+      }
+
+      commit('SET_PLAYING_STATE', shouldPlay)
     } catch (error) {
       console.error('❌ Error toggling playback:', error)
     }
@@ -373,25 +399,32 @@ const actions = {
   },
 
   setVolume({ state, commit }, event) {
-    const volume = typeof event === 'number' ? event : parseInt(event.target.value)
-    const normalizedVolume = Math.max(0, Math.min(100, volume))
-    
-    commit('SET_VOLUME', normalizedVolume)
-    
-    // Si el volumen es > 0, desmutear automáticamente
-    if (normalizedVolume > 0 && state.isMuted) {
-      commit('SET_MUTED', false)
-    }
-    
-    // Si el volumen es 0, mutear
-    if (normalizedVolume === 0 && !state.isMuted) {
-      commit('SET_MUTED', true)
-    }
+  // Permitir que venga número directo o evento del input range
+  const volume = typeof event === 'number'
+    ? event
+    : parseInt(event.target.value, 10)
 
-    if (state.audioService) {
-      state.audioService.setVolume(normalizedVolume)
-    }
-  },
+  // Normalizar a rango 0–100
+  const normalizedVolume = Math.max(0, Math.min(100, volume))
+
+  // Actualizar estado global
+  commit('SET_VOLUME', normalizedVolume)
+
+  // Gestión automática de mute
+  if (normalizedVolume > 0 && state.isMuted) {
+    commit('SET_MUTED', false)
+  }
+
+  if (normalizedVolume === 0 && !state.isMuted) {
+    commit('SET_MUTED', true)
+  }
+
+  // Aplicar volumen inmediatamente al servicio de audio
+  // Esto debe funcionar en play, pause o durante carga
+  if (state.audioService) {
+    state.audioService.setVolume(normalizedVolume)
+  }
+},
 
   toggleMute({ state, commit }) {
     if (state.isMuted) {
@@ -508,6 +541,16 @@ const actions = {
         commit('SET_ORIGINAL_TRACK_ORDER', rootState.tracks.tracks)
       }
     }
+  },
+
+  stopTrack({ commit, state }) {
+    if (state.audioService && state.audioService.howl) {
+      state.audioService.howl.stop()
+    }
+    commit('SET_CURRENT_SONG', null)
+    commit('SET_PLAYING_STATE', false)
+    commit('SET_PLAYBACK_TIME', { currentTime: 0, duration: 0 })
+    commit('SET_PLAYBACK_PROGRESS', { currentTime: 0, duration: 0, progress: 0 })
   },
 
   destroyPlayer({ state, commit }) {

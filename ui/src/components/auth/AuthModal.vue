@@ -125,6 +125,7 @@
 
 <script>
 import AuthService from '@/services/AuthService'
+import { UIState } from '@/store/ui';
 
 export default {
   name: 'AuthModal',
@@ -152,7 +153,6 @@ export default {
   methods: {
     closeModal() {
       this.resetForm()
-      this.$emit('close')
     },
     
     toggleMode() {
@@ -181,55 +181,55 @@ export default {
       this.errorMessage = ''
     },
     
-    async handleSubmit() {
-      // Validaciones básicas
-      if (!this.formData.username || !this.formData.password) {
-        this.errorMessage = 'Por favor, completa todos los campos obligatorios'
-        return
-      }
-      
-      if (!this.isLoginMode && this.formData.password !== this.formData.confirmPassword) {
-        this.errorMessage = 'Las contraseñas no coinciden'
-        return
-      }
-      
-      if (this.formData.password.length < 8) {
-        this.errorMessage = 'La contraseña debe tener al menos 8 caracteres'
-        return
-      }
-      
-      this.isLoading = true
-      this.errorMessage = ''
-      
-      try {
-        if (this.isLoginMode) {
-          await AuthService.login({
-            username: this.formData.username,
-            password: this.formData.password
-          })
-          this.$emit('success', '¡Inicio de sesión exitoso!')
-        } else {
-          await AuthService.register({
-            username: this.formData.username,
-            password: this.formData.password,
-            email: this.formData.email
-          })
-          this.$emit('success', '¡Cuenta creada exitosamente!')
-        }
-        
-        this.closeModal()
-        
-        // Recargar la página para actualizar estado de autenticación
-        setTimeout(() => {
-          window.location.reload()
-        }, 500)
-        
-      } catch (error) {
-        this.errorMessage = this.getErrorMessage(error)
-      } finally {
-        this.isLoading = false
-      }
-    },
+ async handleSubmit() {
+  // Validaciones
+  if (!this.formData.username || !this.formData.password) {
+    this.errorMessage = 'Por favor, completa todos los campos obligatorios'
+    return
+  }
+  if (!this.isLoginMode && this.formData.password !== this.formData.confirmPassword) {
+    this.errorMessage = 'Las contraseñas no coinciden'
+    return
+  }
+  if (this.formData.password.length < 8) {
+    this.errorMessage = 'La contraseña debe tener al menos 8 caracteres'
+    return
+  }
+
+  this.isLoading = true
+  this.errorMessage = ''
+
+  try {
+    if (this.isLoginMode) {
+      await AuthService.login({
+        username: this.formData.username,
+        password: this.formData.password
+      })
+    } else {
+      await AuthService.register({
+        username: this.formData.username,
+        password: this.formData.password,
+        email: this.formData.email
+      })
+    }
+
+    // 🔹 Actualizar UIState reactivo
+    UIState.isAuthenticated = true
+    UIState.currentUser = AuthService.getCurrentUser()
+
+    // 🔹 Cerrar modal inmediatamente
+    this.closeModal()
+
+    // 🔹 Emitir evento global si otros componentes quieren reaccionar (TrackList)
+    this.$emit('success', this.isLoginMode ? '¡Inicio de sesión exitoso!' : '¡Cuenta creada exitosamente!')
+
+  } catch (error) {
+    this.errorMessage = this.getErrorMessage(error)
+  } finally {
+    this.isLoading = false
+  }
+},
+
     
     getErrorMessage(error) {
       if (error.response) {
@@ -337,7 +337,7 @@ export default {
 
 .auth-form label i {
   margin-right: 8px;
-  color: #1db954;
+  color: var(--color-primary);
 }
 
 .form-control {
@@ -353,7 +353,7 @@ export default {
 
 .form-control:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: var(--color-primary);
   box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.2);
 }
 
@@ -385,7 +385,7 @@ export default {
 .btn-auth-submit {
   width: 100%;
   padding: 14px;
-  background: linear-gradient(135deg, #1db954 0%, #1ed760 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
   color: white;
   border: none;
   border-radius: 50px;
@@ -398,7 +398,7 @@ export default {
 
 .btn-auth-submit:hover:not(:disabled) {
   transform: scale(1.02);
-  box-shadow: 0 4px 20px rgba(29, 185, 84, 0.3);
+  box-shadow: 0 4px 20px rgba(29, 107, 185, 0.3);
 }
 
 .btn-auth-submit:disabled {
@@ -416,7 +416,7 @@ export default {
 .btn-auth-switch {
   background: none;
   border: none;
-  color: #1db954;
+  color: var(--color-primary);
   cursor: pointer;
   padding: 0;
   margin-left: 5px;
@@ -425,7 +425,7 @@ export default {
 }
 
 .btn-auth-switch:hover:not(:disabled) {
-  color: #1ed760;
+  color:var(--color-primary-dark);
   text-decoration: underline;
 }
 
@@ -452,7 +452,7 @@ export default {
 }
 
 .security-info i {
-  color: #1db954;
+  color: var(--color-primary);
 }
 
 .alert-danger {

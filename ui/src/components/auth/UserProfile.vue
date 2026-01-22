@@ -45,68 +45,68 @@
 
 <script>
 import AuthService from '@/services/AuthService'
+import { UIState } from '@/store/ui'
+
 
 export default {
   name: 'UserProfile',
+
   data() {
     return {
-      showDropdown: false,
-      showChangePasswordModal: false,
-      showDeleteAccountModal: false
+      showDropdown: false
     }
   },
+
   computed: {
     isAuthenticated() {
-      return AuthService.isAuthenticated()
+      return UIState.isAuthenticated
     },
+
     currentUser() {
-      return AuthService.getCurrentUser() || {}
+      return UIState.currentUser || {}
     }
   },
+
   methods: {
     toggleDropdown() {
       this.showDropdown = !this.showDropdown
     },
-    
+
     openChangePassword() {
       this.showDropdown = false
-      this.$emit('change-password')
+      UIState.currentUser = this.currentUser
+      UIState.showChangePasswordModal = true
     },
-    
+
     openDeleteAccount() {
       this.showDropdown = false
-      this.$emit('delete-account')
+      UIState.currentUser = this.currentUser
+      UIState.showDeleteAccountModal = true
     },
-    
+
     async handleLogout() {
-      try {
-        await AuthService.logout()
-        this.showDropdown = false
-        this.$emit('logout-success')
-        
-        // Recargar para actualizar estado
-        setTimeout(() => {
-          window.location.reload()
-        }, 500)
-      } catch (error) {
-        console.error('Error al cerrar sesión:', error)
-      }
-    },
-    
-    closeDropdown() {
+    try {
+      await AuthService.logout()
+      
+      // ✅ Actualizar UIState para que la UI reaccione
+      UIState.isAuthenticated = false
+      UIState.currentUser = null
+      
+      this.showDropdown = false
+      
+      console.log('✅ Logout exitoso, UI actualizada')
+    } catch (error) {
+      console.error('❌ Error en logout:', error)
+      // Igual limpiamos el estado local
+      UIState.isAuthenticated = false
+      UIState.currentUser = null
       this.showDropdown = false
     }
-  },
-  
-  mounted() {
-    document.addEventListener('click', this.handleClickOutside)
-  },
-  
-  beforeUnmount() {
-    document.removeEventListener('click', this.handleClickOutside)
+  }
   }
 }
 </script>
+
 
 <style scoped>
 .user-profile-dropdown {
@@ -135,7 +135,7 @@ export default {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #1db954 0%, #1ed760 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, #1ed760 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -185,7 +185,7 @@ export default {
   width: 50px;
   height: 50px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #1db954 0%, #1ed760 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, #1ed760 100%);
   display: flex;
   align-items: center;
   justify-content: center;

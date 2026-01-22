@@ -45,7 +45,7 @@ sudo docker network ls
 # 5. Montar nodos backend
 # ================================================================
 ```bash
-sudo docker run --rm -it --name backend_A_1 --network teamnet backend
+sudo docker run --rm -it --name backend_A_1 --network teamnet --network-alias spotify_cluster backend
 ```
 
 --rm es para no tener que borrarlo, si lo quitas se borra solo.
@@ -61,7 +61,7 @@ sudo docker logs -f backend_node_1
 # 5. Montar nodos frontend
 # ================================================================
 ```bash
-docker run —rm -it —name frontend —network teamnet -p 8080:8080 -p 3000:3000 -v .:/app frontend
+sudo docker run --rm -it --name frontend --network teamnet -p 8080:8080 -p 3000:3000 -v .:/app frontend
 ```
 
 Lo mismo si no usas -it puedes verlo ejecutando con
@@ -87,7 +87,7 @@ from app.models import *
 
 Y usas los modelos para hacer peticiones normal, las mas faciles es por cada modelo pedir todo, otras se las pides a chatgpt:
 ```bash
-app.models.Track.objects.all()
+app.models.Track.objects.all() o directamente Track.objects.all()
 ```
 
 muestra todas las canciones. Cambiar Track por Artist o Album para ver esos.
@@ -98,6 +98,8 @@ muestra todas las canciones. Cambiar Track por Artist o Album para ver esos.
 Ejemplo para ver los archivos del nodo backend_node_1, desde una consola cualquiera:
 ```bash
 sudo docker exec -it backend_node_1 /bin/bash
+
+o /bin/sh
 ```
 
 De ahi es usar ls y cd para navegar y ver si tiene los shards creados

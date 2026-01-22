@@ -86,6 +86,10 @@ export default {
       if (Array.isArray(this.track.artist_names)) {
         return this.track.artist_names.join(', ') || 'Artista desconocido'
       }
+      else if (this.track.artist_names)
+      {
+        return this.track.artist_names.toString()
+      }
       return 'Artista desconocido'
     },
     trackAlbum() {

@@ -399,10 +399,6 @@ export default class AudioPlayerService {
         if (this.howl) {
           this.duration = this.howl.duration();
           console.log(`⏱️ [_createHowlFromBlob] Duración: ${this.formatTime(this.duration)}`);
-          
-          // 🔥 REPRODUCIR AUTOMÁTICAMENTE AL CARGAR
-          console.log('▶️ [_createHowlFromBlob] Reproduciendo automáticamente...');
-          this.howl.play();
         }
       },
       onplay: () => {
@@ -493,17 +489,17 @@ export default class AudioPlayerService {
     }
   }
 
-  playAndPause() {
-    if (!this.howl || this.isDestroyed || this.isLoading) {
-      return;
-    }
+  // playAndPause() {
+  //   if (!this.howl || this.isDestroyed || this.isLoading) {
+  //     return;
+  //   }
 
-    if (this.isPlaying) {
-      this.howl.pause();
-    } else {
-      this.howl.play();
-    }
-  }
+  //   if (this.isPlaying) {
+  //     this.howl.pause();
+  //   } else {
+  //     this.howl.play();
+  //   }
+  // }
 
   play() {
     if (this.howl && !this.isDestroyed && !this.isLoading) {
@@ -548,13 +544,14 @@ export default class AudioPlayerService {
   }
 
   setVolume(volume) {
-    const normalizedVolume = Math.max(0, Math.min(1, volume / 100));
-    this.volume = normalizedVolume;
-    
+    const normalized = Math.max(0, Math.min(1, volume / 100))
+    this.volume = normalized
+
     if (this.howl && !this.isDestroyed) {
-      this.howl.volume(normalizedVolume);
+      this.howl.volume(normalized)
     }
   }
+
 
   formatTime(seconds) {
     if (!isFinite(seconds) || seconds < 0) return '0:00';

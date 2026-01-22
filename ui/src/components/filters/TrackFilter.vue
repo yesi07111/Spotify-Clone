@@ -1,3 +1,4 @@
+<!-- filters/TrackFilter.vue -->
 <template>
   <div
     v-if="visible"
@@ -69,7 +70,6 @@
 <script>
 import { mapActions } from 'vuex'
 
-const API_BASE = process.env.VUE_APP_API_BASE_URL || 'http://localhost:8000/api'
 
 export default {
   name: 'TrackFilterModal',
@@ -102,36 +102,36 @@ export default {
     },
     
     async loadArtists() {
-      this.loadingArtists = true
-      this.errorArtists = null
-      try {
-        const res = await fetch(`${API_BASE}/artists/`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        this.artists = Array.isArray(data) ? data : []
-      } catch (err) {
-        this.errorArtists = 'Error al cargar artistas'
-        console.error('Error loading artists:', err)
-      } finally {
-        this.loadingArtists = false
-      }
-    },
-    
-    async loadAlbums() {
-      this.loadingAlbums = true
-      this.errorAlbums = null
-      try {
-        const res = await fetch(`${API_BASE}/albums/`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        this.albums = Array.isArray(data) ? data : []
-      } catch (err) {
-        this.errorAlbums = 'Error al cargar álbumes'
-        console.error('Error loading albums:', err)
-      } finally {
-        this.loadingAlbums = false
-      }
-    },
+  this.loadingArtists = true
+  this.errorArtists = null
+  try {
+    const ApiService = require('@/services/ApiService').default
+    const response = await ApiService.getArtists()
+    this.artists = Array.isArray(response.data) ? response.data : []
+    console.log('[FILTER] Artistas cargados:', this.artists.length)
+  } catch (err) {
+    this.errorArtists = 'Error al cargar artistas'
+    console.error('Error loading artists:', err)
+  } finally {
+    this.loadingArtists = false
+  }
+},
+
+async loadAlbums() {
+  this.loadingAlbums = true
+  this.errorAlbums = null
+  try {
+    const ApiService = require('@/services/ApiService').default
+    const response = await ApiService.getAlbums()
+    this.albums = Array.isArray(response.data) ? response.data : []
+    console.log('[FILTER] Álbumes cargados:', this.albums.length)
+  } catch (err) {
+    this.errorAlbums = 'Error al cargar álbumes'
+    console.error('Error loading albums:', err)
+  } finally {
+    this.loadingAlbums = false
+  }
+},
     
     async submitForm() {
       this.isSubmitting = true

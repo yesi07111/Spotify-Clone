@@ -1,4 +1,4 @@
-<!-- components/forms/EditTrack.vue -->
+<!-- components/forms/EditTrack.vue - Template completo -->
 <template>
   <div 
     v-if="showModal"
@@ -27,44 +27,87 @@
               />
             </div>
 
-            <!-- Artista - Seleccionar existente -->
+            <!-- Artista - Seleccionar existente o crear nuevo -->
             <div class="mb-3">
-              <label for="editArtistSelect" class="form-label">Artista *</label>
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <label class="form-label">Artista</label>
+                <button type="button" class="btn btn-sm btn-outline-info" @click="toggleNewArtist">
+                  {{ showNewArtist ? 'Seleccionar existente' : 'Crear nuevo artista' }}
+                </button>
+              </div>
+              
               <select
+                v-if="!showNewArtist"
                 id="editArtistSelect"
                 class="form-select"
                 v-model="formData.artistIds"
                 multiple
-                required
                 :disabled="artists.length === 0"
               >
-                <option v-if="artists.length === 0" disabled value="">No hay artistas disponibles</option>
+                <option :value="null">Sin artista</option>
                 <option v-for="artist in artists" :key="artist.id" :value="artist.id">
                   {{ artist.name }}
                 </option>
               </select>
-              <div class="form-text" v-if="artists.length === 0">
-                No hay artistas en la base de datos.
+              
+              <div v-else class="input-group">
+                <input
+                  type="text"
+                  class="form-control"
+                  v-model="newArtistName"
+                  placeholder="Nombre del nuevo artista"
+                />
+                <button class="btn btn-outline-primary" type="button" @click="findOrCreateArtist">
+                  <i class="fas fa-plus"></i>
+                </button>
+              </div>
+              <div class="form-text">
+                <span v-if="!showNewArtist && artists.length === 0">
+                  No hay artistas en la base de datos. Crea uno nuevo.
+                </span>
+                <span v-else>
+                  Puedes seleccionar múltiples artistas manteniendo presionada la tecla Ctrl
+                </span>
               </div>
             </div>
 
-            <!-- Álbum - Seleccionar existente -->
+            <!-- Álbum - Seleccionar existente o crear nuevo -->
             <div class="mb-3">
-              <label for="editAlbumSelect" class="form-label">Álbum *</label>
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <label class="form-label">Álbum</label>
+                <button type="button" class="btn btn-sm btn-outline-info" @click="toggleNewAlbum">
+                  {{ showNewAlbum ? 'Seleccionar existente' : 'Crear nuevo álbum' }}
+                </button>
+              </div>
+              
               <select
+                v-if="!showNewAlbum"
                 id="editAlbumSelect"
                 class="form-select"
                 v-model="formData.albumId"
-                required
                 :disabled="albums.length === 0"
               >
-                <option v-if="albums.length === 0" disabled value="">No hay álbumes disponibles</option>
+                <option :value="null">Sin álbum</option>
                 <option v-for="album in albums" :key="album.id" :value="album.id">
                   {{ album.name }}
                 </option>
               </select>
-              <div class="form-text" v-if="albums.length === 0">
-                No hay álbumes en la base de datos.
+              
+              <div v-else class="input-group">
+                <input
+                  type="text"
+                  class="form-control"
+                  v-model="newAlbumName"
+                  placeholder="Nombre del nuevo álbum"
+                />
+                <button class="btn btn-outline-primary" type="button" @click="findOrCreateAlbum">
+                  <i class="fas fa-plus"></i>
+                </button>
+              </div>
+              <div class="form-text">
+                <span v-if="!showNewAlbum && albums.length === 0">
+                  No hay álbumes en la base de datos. Crea uno nuevo.
+                </span>
               </div>
             </div>
 
@@ -101,7 +144,7 @@
 </template>
 
 <script>
-import ApiService from '@/services/ApiService'
+import UploadService from '@/services/UploadService'
 
 export default {
   name: 'EditTrack',
@@ -126,7 +169,11 @@ export default {
       artists: [],
       submitting: false,
       errorMessage: null,
-      successMessage: null
+      successMessage: null,
+      showNewArtist: false,
+      showNewAlbum: false,
+      newArtistName: '',
+      newAlbumName: ''
     }
   },
   watch: {
@@ -145,7 +192,7 @@ export default {
       
       this.formData.title = this.track.title || ''
       this.formData.albumId = this.track.album || null
-      this.formData.artistIds = this.track.artist || []
+      this.formData.artistIds = Array.isArray(this.track.artist) ? this.track.artist : []
       
       await this.fetchAlbums()
       await this.fetchArtists()
@@ -153,84 +200,172 @@ export default {
     
     async fetchAlbums() {
       try {
-        this.albums = await ApiService.getAlbums()
+        this.albums = await UploadService.getAlbums()
+        if (this.albums.length === 0) {
+          this.showNewAlbum = true
+        }
       } catch (err) {
-        console.error('Error fetching albums:', err)
+        console.error('fetchAlbums error', err)
         this.albums = []
+        this.showNewAlbum = true
       }
     },
-    
+
     async fetchArtists() {
       try {
-        this.artists = await ApiService.getArtists()
+        this.artists = await UploadService.getArtists()
+        if (this.artists.length === 0) {
+          this.showNewArtist = true
+        }
       } catch (err) {
-        console.error('Error fetching artists:', err)
+        console.error('fetchArtists error', err)
         this.artists = []
+        this.showNewArtist = true
       }
     },
+
     
+    toggleNewArtist() {
+      this.showNewArtist = !this.showNewArtist
+      this.newArtistName = ''
+    },
+    
+    toggleNewAlbum() {
+      this.showNewAlbum = !this.showNewAlbum
+      this.newAlbumName = ''
+    },
+    
+    async findOrCreateArtistByName(name) {
+      const existing = this.artists.find(
+        a => a.name.toLowerCase() === name.toLowerCase()
+      )
+
+      if (existing) return existing.id
+
+      const created = await UploadService.createArtist({ name })
+      this.artists.push(created)
+      return created.id
+    },
+
+    async findOrCreateAlbumByName(name) {
+      const existing = this.albums.find(
+        a => a.name.toLowerCase() === name.toLowerCase()
+      )
+
+      if (existing) return existing.id
+
+      const created = await UploadService.createAlbum({
+        name,
+        date: new Date().toISOString().split('T')[0],
+        author: null
+      })
+
+      this.albums.push(created)
+      return created.id
+    },
+        
     async submitForm() {
       this.errorMessage = null
       this.successMessage = null
 
-      // Validaciones
-      if (!this.formData.title || !this.formData.albumId || this.formData.artistIds.length === 0) {
-        this.errorMessage = 'Todos los campos son obligatorios'
+      if (!this.formData.title) {
+        this.errorMessage = 'El título es obligatorio'
         return
       }
 
       this.submitting = true
 
       try {
-        // Preparar los datos para PATCH (solo campos modificados)
+        if (this.showNewArtist && this.newArtistName.trim()) {
+          const artistName = this.newArtistName.trim()
+
+          const existingArtist = this.artists.find(
+            a => a.name.toLowerCase() === artistName.toLowerCase()
+          )
+
+          let artistId
+          if (existingArtist) {
+            artistId = existingArtist.id
+          } else {
+            const createdArtist = await UploadService.createArtist({ name: artistName })
+            this.artists.push(createdArtist)
+            artistId = createdArtist.id
+          }
+
+          // Sustituye TODOS los artistas anteriores
+          this.formData.artistIds = [artistId]
+        }
+
+        if (this.showNewAlbum && this.newAlbumName.trim()) {
+          const albumName = this.newAlbumName.trim()
+
+          const existingAlbum = this.albums.find(
+            a => a.name.toLowerCase() === albumName.toLowerCase()
+          )
+
+          let albumId
+          if (existingAlbum) {
+            albumId = existingAlbum.id
+          } else {
+            const createdAlbum = await UploadService.createAlbum({
+              name: albumName,
+              date: new Date().toISOString().split('T')[0],
+              author: this.formData.artistIds.length > 0
+                ? this.formData.artistIds[0]
+                : null
+            })
+            this.albums.push(createdAlbum)
+            albumId = createdAlbum.id
+          }
+
+          this.formData.albumId = albumId
+        }
+
         const patchData = {}
-        
+
         if (this.formData.title !== this.track.title) {
           patchData.title = this.formData.title
         }
-        
+
         if (this.formData.albumId !== this.track.album) {
           patchData.album = this.formData.albumId
         }
-        
-        // Comparar arrays de artistas
+
         const currentArtists = Array.isArray(this.track.artist) ? this.track.artist : []
-        const newArtists = Array.isArray(this.formData.artistIds) ? this.formData.artistIds : []
-        
-        if (JSON.stringify([...currentArtists].sort()) !== JSON.stringify([...newArtists].sort())) {
+        const newArtists = Array.isArray(this.formData.artistIds)
+          ? this.formData.artistIds
+          : []
+
+        if (
+          JSON.stringify([...currentArtists].sort()) !==
+          JSON.stringify([...newArtists].sort())
+        ) {
           patchData.artist = newArtists
         }
-        
-        // Solo enviar si hay cambios
-        if (Object.keys(patchData).length > 0) {
-          await ApiService.updateTrack(this.track.id, patchData)
-          this.successMessage = 'Canción actualizada exitosamente'
-          
-          // Emitir evento de éxito
-          this.$emit('track-updated')
-          
-          // Cerrar después de 2 segundos
-          setTimeout(() => {
-            this.closeModal()
-          }, 2000)
-        } else {
-          this.successMessage = 'No se detectaron cambios'
-          setTimeout(() => {
-            this.closeModal()
-          }, 1500)
+
+        if (Object.keys(patchData).length === 0) {
+          this.errorMessage = 'No se detectaron cambios'
+          return
         }
-        
+
+        const updated = await UploadService.updateTrack(this.track.id, patchData)
+
+        this.$emit('track-updated', updated)
+        this.closeModal()
+
       } catch (err) {
-        this.errorMessage = 'Error al actualizar la canción: ' + (err.response?.data?.message || err.message)
-        console.error('Error updating track:', err)
+        this.errorMessage =
+          'Error al actualizar la canción: ' +
+          (err.response?.data?.message || err.message)
+        console.error('[EDIT] Error updating track:', err)
       } finally {
         this.submitting = false
       }
     },
     
     closeModal() {
-      this.$emit('close')
       this.resetForm()
+      this.$emit('close')
     },
     
     resetForm() {
@@ -241,6 +376,11 @@ export default {
       }
       this.errorMessage = null
       this.successMessage = null
+      this.showNewArtist = false
+      this.showNewAlbum = false
+      this.newArtistName = ''
+      this.newAlbumName = ''
+      this.submitting = false
     }
   },
   mounted() {

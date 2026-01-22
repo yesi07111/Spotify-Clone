@@ -5,7 +5,7 @@ from venv import logger
 import Pyro5.api as rpc
 
 from backend.settings import CHUNK_SIZE, STORAGE_ROOT, CHUNK_RANGES, RPC_TIMEOUT, CHUNK_SIZE
-
+from raft.log_utils import log_info, log_error, log_warning, log_success
 
 @rpc.expose
 class StorageManager:
@@ -81,13 +81,13 @@ class StorageManager:
         file_dir = os.path.join(self.storage_path, filename)
         os.makedirs(file_dir, exist_ok=True)
         
-        logging.info("Se va a escribir el shard...")
+        log_info("STORAGE MANAGER","Se va a escribir el shard...", color="green")
         # Guardar el rango
         range_path = os.path.join(file_dir, f"range_{range_id}")
         with open(range_path, "wb") as f:
             f.write(data)
         
-        logging.info(f"Se creo el shard de nombre {filename} con el range_id: {range_id}")
+        log_info("STORAGE MANAGER", f"Se creo el shard de nombre {filename} con el range_id: {range_id}", color="green")
         
         return True
 
@@ -95,12 +95,11 @@ class StorageManager:
         """
         Obtiene todos los chunks de un rango específico.
         """
-        import logging
         file_dir = os.path.join(self.storage_path, filename)
         range_path = os.path.join(file_dir, f"range_{range_id}")
         
         if not os.path.isfile(range_path):
-            logging.error(f"Rango {range_id} no encontrado para {filename}")
+            log_error("STORAGE MANAGER", f"Rango {range_id} no encontrado para {filename}")
             raise FileNotFoundError(f"Rango {range_id} no encontrado para {filename}")
         
         with open(range_path, "rb") as f:
@@ -110,9 +109,11 @@ class StorageManager:
         """
         Elimina un rango específico de chunks de un archivo.
         """
+        from raft.log_utils import log_info, log_warning
         file_dir = os.path.join(self.storage_path, filename)
         range_path = os.path.join(file_dir, f"range_{range_id}")
         
+        log_info("STORAGE MANAGER", f"Intentando eliminar shard {range_id} de {filename}...")
         if os.path.isfile(range_path):
             os.remove(range_path)
             
@@ -120,8 +121,11 @@ class StorageManager:
             if not os.listdir(file_dir):
                 os.rmdir(file_dir)
             
+            log_info("STORAGE MANAGER", f"Se eliminó con éxito el shard {range_id} de {filename}.")
+
             return True
         
+        log_warning("STORAGE MANAGER", f"No se encontro el shard {range_id} de {filename}")
         return False
 
     def has_file_range(self, filename: str, range_id: str) -> bool:
@@ -149,63 +153,84 @@ class StorageManager:
         
         return sorted(ranges)
     
+
     def read_chunks_delegated(
-        self, filename: str, start_chunk: int, chunk_count: int, global_index: dict
-    ) -> list:
+    self, filename: str, start_chunk: int, chunk_count: int, global_index: dict
+) -> list:
         """
         Método expuesto para que el líder delegue lectura completa.
         Este nodo busca chunks locales y pide faltantes a otros nodos.
         """
-        end_chunk = start_chunk + chunk_count
-        all_chunks = [None] * chunk_count
-        
-        # Obtener info del archivo del índice global
-        file_metadata = global_index.get("files_metadata", {}).get(filename)
-        if not file_metadata:
-            raise FileNotFoundError(f"Archivo {filename} no encontrado en índice")
-        
-        chunk_distribution = file_metadata.get("chunk_distribution", {})
-        
-        # 1. BUSCAR CHUNKS LOCALES
-        from .utils import get_raft_server
-        raft_server = get_raft_server()
-        current_node_id = raft_server.host
-        
-        for range_key, nodes_with_range in chunk_distribution.items():
-            if current_node_id not in nodes_with_range:
-                continue
+        try:
+            end_chunk = start_chunk + chunk_count
+            all_chunks = [None] * chunk_count
             
-            range_start, range_end = map(int, range_key.split("-"))
-            intersection_start = max(start_chunk, range_start)
-            intersection_end = min(end_chunk, range_end)
+            # Obtener info del archivo del índice global
+            file_metadata = global_index.get("files_metadata", {}).get(filename)
+            if not file_metadata:
+                raise FileNotFoundError(f"Archivo {filename} no encontrado en índice")
             
-            if intersection_start >= intersection_end:
-                continue
+            chunk_distribution = file_metadata.get("chunk_distribution", {})
             
-            try:
-                range_data = self.get_chunk_range(filename, range_key)
+            if not chunk_distribution:
+                raise Exception(f"No hay distribución de chunks para archivo {filename}")
+            
+            # 1. BUSCAR CHUNKS LOCALES
+            from .utils import get_raft_server
+            raft_server = get_raft_server()
+            current_node_id = raft_server.host
+            
+            local_count = 0
+            
+            for range_key, nodes_with_range in chunk_distribution.items():
+                if current_node_id not in nodes_with_range:
+                    continue
                 
-                for chunk_idx in range(intersection_start, intersection_end):
-                    offset_in_range = chunk_idx - range_start
-                    start_byte = offset_in_range * CHUNK_SIZE
-                    end_byte = start_byte + CHUNK_SIZE
+                range_start, range_end = map(int, range_key.split("-"))
+                intersection_start = max(start_chunk, range_start)
+                intersection_end = min(end_chunk, range_end)
+                
+                if intersection_start >= intersection_end:
+                    continue
+                
+                try:
+                    range_data = self.get_chunk_range(filename, range_key)
                     
-                    chunk_data = range_data[start_byte:end_byte]
-                    relative_idx = chunk_idx - start_chunk
-                    all_chunks[relative_idx] = chunk_data
+                    for chunk_idx in range(intersection_start, intersection_end):
+                        offset_in_range = chunk_idx - range_start
+                        start_byte = offset_in_range * CHUNK_SIZE
+                        end_byte = start_byte + CHUNK_SIZE
+                        
+                        chunk_data = range_data[start_byte:end_byte]
+                        relative_idx = chunk_idx - start_chunk
+                        all_chunks[relative_idx] = chunk_data
+                        local_count += 1
+                
+                except Exception as e:
+                    log_warning("STORAGE DELEGATED", 
+                            f"Error leyendo rango local {range_key}: {type(e).__name__}: {e}", 
+                            color="yellow")
             
-            except Exception:
-                pass
-        
-        # 2. IDENTIFICAR Y PEDIR CHUNKS FALTANTES
-        missing_chunks = [
-            start_chunk + i 
-            for i in range(chunk_count) 
-            if all_chunks[i] is None
-        ]
-        
-        if missing_chunks:
-            # Agrupar por rango y pedir a otros nodos
+            log_info("STORAGE DELEGATED", 
+                    f"[{current_node_id}] Chunks locales: {local_count}/{chunk_count}", 
+                    color="light_green")
+            
+            # 2. IDENTIFICAR CHUNKS FALTANTES
+            missing_chunks = [
+                start_chunk + i 
+                for i in range(chunk_count) 
+                if all_chunks[i] is None
+            ]
+            
+            if not missing_chunks:
+                log_success("STORAGE DELEGATED", "Todos los chunks disponibles localmente", color="light_green")
+                return all_chunks
+            
+            log_info("STORAGE DELEGATED", 
+                    f"Chunks faltantes: {len(missing_chunks)}/{chunk_count}", 
+                    color="yellow")
+            
+            # 3. AGRUPAR CHUNKS FALTANTES POR RANGO
             chunks_by_range = {}
             
             for chunk_idx in missing_chunks:
@@ -214,48 +239,215 @@ class StorageManager:
                     
                     if range_start <= chunk_idx < range_end:
                         if range_key not in chunks_by_range:
+                            remote_nodes = [n for n in nodes_with_range if n != current_node_id]
                             chunks_by_range[range_key] = {
+                                "range_start": range_start,
                                 "chunks": [],
-                                "nodes": [n for n in nodes_with_range if n != current_node_id]
+                                "nodes": remote_nodes
                             }
                         chunks_by_range[range_key]["chunks"].append(chunk_idx)
                         break
             
-            # Pedir rangos a otros nodos
+            # 4. PEDIR CHUNKS REMOTOS
             import Pyro5.api as rpc
+            import base64
             
             for range_key, info in chunks_by_range.items():
                 chunks_needed = info["chunks"]
                 remote_nodes = info["nodes"]
+                range_start = info["range_start"]
                 
                 if not remote_nodes:
+                    log_warning("STORAGE DELEGATED", 
+                            f"Rango {range_key}: sin nodos remotos", 
+                            color="yellow")
                     continue
                 
-                # Seleccionar primer nodo disponible (ya optimizado por líder)
-                selected_node = remote_nodes[0]
-                
-                try:
-                    uri = f"PYRO:raft.storage.{selected_node}@{selected_node}:{raft_server.port}"
-                    proxy = rpc.Proxy(uri)
-                    proxy._pyroTimeout = 5.0
-                    
-                    range_data = proxy.get_chunk_range(filename, range_key)
-                    range_start, range_end = map(int, range_key.split("-"))
-                    
-                    for chunk_idx in chunks_needed:
-                        offset_in_range = chunk_idx - range_start
-                        start_byte = offset_in_range * CHUNK_SIZE
-                        end_byte = start_byte + CHUNK_SIZE
+                # Intentar con cada nodo hasta éxito
+                for selected_node in remote_nodes:
+                    try:
+                        uri = f"PYRO:raft.storage.{selected_node}@{selected_node}:{raft_server.port}"
+                        proxy = rpc.Proxy(uri)
+                        proxy._pyroTimeout = 2.0
                         
-                        chunk_data = range_data[start_byte:end_byte]
-                        relative_idx = chunk_idx - start_chunk
-                        all_chunks[relative_idx] = chunk_data
+                        range_data = proxy.get_chunk_range(filename, range_key)
+                        
+                        # 🔥 FIX: Manejar dict con base64 de Pyro5
+                        if isinstance(range_data, dict):
+                            if range_data.get('encoding') == 'base64' and 'data' in range_data:
+                                range_data = base64.b64decode(range_data['data'])
+                            else:
+                                log_error("STORAGE DELEGATED", 
+                                        f"Dict inválido de {selected_node}: keys={list(range_data.keys())}", 
+                                        color="red")
+                                continue
+                        elif isinstance(range_data, bytearray):
+                            range_data = bytes(range_data)
+                        elif not isinstance(range_data, bytes):
+                            log_error("STORAGE DELEGATED", 
+                                    f"Tipo incorrecto de {selected_node}: {type(range_data).__name__}", 
+                                    color="red")
+                            continue
+                        
+                        if not range_data or len(range_data) == 0:
+                            log_warning("STORAGE DELEGATED", 
+                                    f"Rango {range_key} vacío desde {selected_node}", 
+                                    color="yellow")
+                            continue
+                        
+                        # Extraer chunks del rango
+                        for chunk_idx in chunks_needed:
+                            offset_in_range = chunk_idx - range_start
+                            start_byte = offset_in_range * CHUNK_SIZE
+                            end_byte = start_byte + CHUNK_SIZE
+                            
+                            if start_byte >= len(range_data):
+                                log_warning("STORAGE DELEGATED", 
+                                        f"Chunk {chunk_idx} fuera de límites en rango {range_key}", 
+                                        color="yellow")
+                                continue
+                            
+                            chunk_data = range_data[start_byte:end_byte]
+                            relative_idx = chunk_idx - start_chunk
+                            all_chunks[relative_idx] = chunk_data
+                        
+                        log_success("STORAGE DELEGATED", 
+                                f"Rango {range_key} obtenido desde {selected_node}", 
+                                color="light_green")
+                        break
+                        
+                    except Exception as e:
+                        log_warning("STORAGE DELEGATED", 
+                                f"Fallo con {selected_node} para {range_key}: {type(e).__name__}: {str(e)[:100]}", 
+                                color="yellow")
+                        continue
+            
+            # 5. VERIFICACIÓN FINAL
+            still_missing = sum(1 for c in all_chunks if c is None)
+            
+            if still_missing > 0:
+                missing_indices = [start_chunk + i for i, c in enumerate(all_chunks) if c is None]
+                log_error("STORAGE DELEGATED", 
+                        f"Faltan {still_missing} chunks: {missing_indices[:10]}", 
+                        color="red")
+                raise Exception(f"No se pudieron obtener {still_missing}/{chunk_count} chunks")
+            
+            log_success("STORAGE DELEGATED", f"✓ {chunk_count} chunks obtenidos", color="light_green")
+            return all_chunks
+            
+        except Exception as e:
+            log_error("STORAGE DELEGATED", 
+                    f"EXCEPCIÓN FATAL: {type(e).__name__}: {e}", 
+                    color="red")
+            raise
+    
+    # def read_chunks_delegated(
+    #     self, filename: str, start_chunk: int, chunk_count: int, global_index: dict
+    # ) -> list:
+    #     """
+    #     Método expuesto para que el líder delegue lectura completa.
+    #     Este nodo busca chunks locales y pide faltantes a otros nodos.
+    #     """
+    #     end_chunk = start_chunk + chunk_count
+    #     all_chunks = [None] * chunk_count
+        
+    #     # Obtener info del archivo del índice global
+    #     file_metadata = global_index.get("files_metadata", {}).get(filename)
+    #     if not file_metadata:
+    #         raise FileNotFoundError(f"Archivo {filename} no encontrado en índice")
+        
+    #     chunk_distribution = file_metadata.get("chunk_distribution", {})
+        
+    #     # 1. BUSCAR CHUNKS LOCALES
+    #     from .utils import get_raft_server
+    #     raft_server = get_raft_server()
+    #     current_node_id = raft_server.host
+        
+    #     for range_key, nodes_with_range in chunk_distribution.items():
+    #         if current_node_id not in nodes_with_range:
+    #             continue
+            
+    #         range_start, range_end = map(int, range_key.split("-"))
+    #         intersection_start = max(start_chunk, range_start)
+    #         intersection_end = min(end_chunk, range_end)
+            
+    #         if intersection_start >= intersection_end:
+    #             continue
+            
+    #         try:
+    #             range_data = self.get_chunk_range(filename, range_key)
                 
-                except Exception:
-                    pass
+    #             for chunk_idx in range(intersection_start, intersection_end):
+    #                 offset_in_range = chunk_idx - range_start
+    #                 start_byte = offset_in_range * CHUNK_SIZE
+    #                 end_byte = start_byte + CHUNK_SIZE
+                    
+    #                 chunk_data = range_data[start_byte:end_byte]
+    #                 relative_idx = chunk_idx - start_chunk
+    #                 all_chunks[relative_idx] = chunk_data
+            
+    #         except Exception:
+    #             pass
         
-        # Verificar integridad
-        if None in all_chunks:
-            raise Exception(f"No se pudieron obtener todos los chunks")
+    #     # 2. IDENTIFICAR Y PEDIR CHUNKS FALTANTES
+    #     missing_chunks = [
+    #         start_chunk + i 
+    #         for i in range(chunk_count) 
+    #         if all_chunks[i] is None
+    #     ]
         
-        return all_chunks
+    #     if missing_chunks:
+    #         # Agrupar por rango y pedir a otros nodos
+    #         chunks_by_range = {}
+            
+    #         for chunk_idx in missing_chunks:
+    #             for range_key, nodes_with_range in chunk_distribution.items():
+    #                 range_start, range_end = map(int, range_key.split("-"))
+                    
+    #                 if range_start <= chunk_idx < range_end:
+    #                     if range_key not in chunks_by_range:
+    #                         chunks_by_range[range_key] = {
+    #                             "chunks": [],
+    #                             "nodes": [n for n in nodes_with_range if n != current_node_id]
+    #                         }
+    #                     chunks_by_range[range_key]["chunks"].append(chunk_idx)
+    #                     break
+            
+    #         # Pedir rangos a otros nodos
+    #         import Pyro5.api as rpc
+            
+    #         for range_key, info in chunks_by_range.items():
+    #             chunks_needed = info["chunks"]
+    #             remote_nodes = info["nodes"]
+                
+    #             if not remote_nodes:
+    #                 continue
+                
+    #             # Seleccionar primer nodo disponible (ya optimizado por líder)
+    #             selected_node = remote_nodes[0]
+                
+    #             try:
+    #                 uri = f"PYRO:raft.storage.{selected_node}@{selected_node}:{raft_server.port}"
+    #                 proxy = rpc.Proxy(uri)
+    #                 proxy._pyroTimeout = 5.0
+                    
+    #                 range_data = proxy.get_chunk_range(filename, range_key)
+    #                 range_start, range_end = map(int, range_key.split("-"))
+                    
+    #                 for chunk_idx in chunks_needed:
+    #                     offset_in_range = chunk_idx - range_start
+    #                     start_byte = offset_in_range * CHUNK_SIZE
+    #                     end_byte = start_byte + CHUNK_SIZE
+                        
+    #                     chunk_data = range_data[start_byte:end_byte]
+    #                     relative_idx = chunk_idx - start_chunk
+    #                     all_chunks[relative_idx] = chunk_data
+                
+    #             except Exception:
+    #                 pass
+        
+    #     # Verificar integridad
+    #     if None in all_chunks:
+    #         raise Exception(f"No se pudieron obtener todos los chunks")
+        
+    #     return all_chunks

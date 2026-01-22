@@ -111,44 +111,58 @@ export default {
     },
     
     async handleSubmit() {
-      // Validaciones
-      if (this.form.newPassword !== this.form.confirmPassword) {
-        this.errorMessage = 'Las contraseñas nuevas no coinciden'
-        return
-      }
-      
-      if (this.form.newPassword.length < 8) {
-        this.errorMessage = 'La nueva contraseña debe tener al menos 8 caracteres'
-        return
-      }
-      
-      if (this.form.currentPassword === this.form.newPassword) {
-        this.errorMessage = 'La nueva contraseña debe ser diferente a la actual'
-        return
-      }
-      
-      this.isLoading = true
-      this.errorMessage = ''
-      this.successMessage = ''
-      
-      try {
-        await AuthService.changePassword({
-          current_password: this.form.currentPassword,
-          new_password: this.form.newPassword
-        })
-        
-        this.successMessage = '¡Contraseña cambiada exitosamente!'
-        setTimeout(() => {
-          this.$emit('success', 'Contraseña actualizada')
-          this.close()
-        }, 2000)
-        
-      } catch (error) {
-        this.errorMessage = error.response?.data?.detail || 'Error al cambiar la contraseña'
-      } finally {
-        this.isLoading = false
-      }
-    }
+  // Validaciones
+  if (this.form.newPassword !== this.form.confirmPassword) {
+    this.errorMessage = 'Las contraseñas nuevas no coinciden'
+    return
+  }
+  
+  if (this.form.newPassword.length < 8) {
+    this.errorMessage = 'La nueva contraseña debe tener al menos 8 caracteres'
+    return
+  }
+  
+  if (this.form.currentPassword === this.form.newPassword) {
+    this.errorMessage = 'La nueva contraseña debe ser diferente a la actual'
+    return
+  }
+  
+  this.isLoading = true
+  this.errorMessage = ''
+  this.successMessage = ''
+  
+  try {
+    console.log('🔐 [CHANGE PASSWORD] Enviando request...')
+    console.log('🔐 [CHANGE PASSWORD] Current password length:', this.form.currentPassword.length)
+    console.log('🔐 [CHANGE PASSWORD] New password length:', this.form.newPassword.length)
+    
+    const response = await AuthService.changePassword({
+      current_password: this.form.currentPassword,  // texto plano
+      new_password: this.form.newPassword           // texto plano
+    })
+    
+    console.log('✅ [CHANGE PASSWORD] Respuesta exitosa:', response)
+    
+    this.successMessage = '¡Contraseña cambiada exitosamente!'
+    setTimeout(() => {
+      this.$emit('success', 'Contraseña actualizada')
+      this.$emit('close')
+    }, 2000)
+    
+  } catch (error) {
+    console.error('❌ [CHANGE PASSWORD] Error completo:', error)
+    console.error('❌ [CHANGE PASSWORD] Response data:', error.response?.data)
+    console.error('❌ [CHANGE PASSWORD] Response status:', error.response?.status)
+    
+    this.errorMessage = error.response?.data?.current_password?.[0] || 
+                        error.response?.data?.new_password?.[0] ||
+                        error.response?.data?.detail || 
+                        error.response?.data?.error ||
+                        'Error al cambiar la contraseña'
+  } finally {
+    this.isLoading = false
+  }
+}
   }
 }
 </script>
@@ -250,7 +264,7 @@ export default {
 
 .form-group input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: var(--color-primary);
   box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.2);
 }
 
@@ -322,7 +336,7 @@ export default {
 }
 
 .btn-submit {
-  background: linear-gradient(135deg, #1db954 0%, #1ed760 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, #1ed760 100%);
   color: white;
   position: relative;
 }

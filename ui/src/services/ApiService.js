@@ -2,6 +2,11 @@
 import axios from 'axios'
 import AuthService from './AuthService';
 
+// Configuración de reintentos
+const IMMEDIATE_RETRIES = 5
+const DELAYED_RETRIES = 5
+const RETRY_DELAY_MS = 500 // Delay entre reintentos (configurable)
+
 const API_BASE_URL = process.env.VUE_APP_API_URL || 'http://127.0.0.1:8000/api'
 
 const apiClient = axios.create({
@@ -12,6 +17,55 @@ const apiClient = axios.create({
   },
   withCredentials: true
 })
+
+// Función de reintentos mejorada
+async function retryRequest(requestFn, maxImmediateRetries = IMMEDIATE_RETRIES, maxDelayedRetries = DELAYED_RETRIES, delay = RETRY_DELAY_MS) {
+  let lastError
+  
+  // Fase 1: Reintentos inmediatos
+  for (let attempt = 1; attempt <= maxImmediateRetries; attempt++) {
+    try {
+      console.log(`[RETRY] Intento inmediato ${attempt}/${maxImmediateRetries}`)
+      return await requestFn()
+    } catch (error) {
+      lastError = error
+      
+      // Si es error de autenticación, no reintentar
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        console.log('[RETRY] Error de autenticación, no se reintenta')
+        throw error
+      }
+      
+      console.log(`[RETRY] Intento inmediato ${attempt} falló:`, error.message)
+    }
+  }
+  
+  // Fase 2: Reintentos con delay
+  for (let attempt = 1; attempt <= maxDelayedRetries; attempt++) {
+    try {
+      console.log(`[RETRY] Esperando ${delay}ms antes del intento ${attempt}/${maxDelayedRetries}`)
+      await new Promise(resolve => setTimeout(resolve, delay))
+      
+      console.log(`[RETRY] Intento con delay ${attempt}/${maxDelayedRetries}`)
+      return await requestFn()
+    } catch (error) {
+      lastError = error
+      
+      // Si es error de autenticación, no reintentar
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        console.log('[RETRY] Error de autenticación en fase con delay, no se reintenta')
+        throw error
+      }
+      
+      console.log(`[RETRY] Intento con delay ${attempt} falló:`, error.message)
+    }
+  }
+  
+  console.error('[RETRY] Todos los reintentos fallaron')
+  throw lastError
+}
+
+
 
 // ✅ INTERCEPTOR para AGREGAR TOKEN (esto SÍ funciona)
 apiClient.interceptors.request.use(
@@ -54,12 +108,10 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true
       
       try {
-        // Refrescar token
-        const refreshed = await AuthService.refreshToken()
-        if (refreshed) {
-          // Reintentar
-          return apiClient(originalRequest)
-        }
+        const newAccess = await AuthService.refreshToken()
+        originalRequest.headers.Authorization = `Bearer ${newAccess}`
+        return apiClient(originalRequest)
+
       } catch (refreshError) {
         console.error('[API DEBUG] Refresh failed:', refreshError)
         AuthService.logout()
@@ -69,54 +121,65 @@ apiClient.interceptors.response.use(
     return Promise.reject(error)
   }
 )
-
 export default {
   // Método genérico
   async executeApiRequest(url, params = {}) {
-    return apiClient.get(url, { params });
+    return retryRequest(() => apiClient.get(url, { params }))
   },
 
   // Tracks
   getTracks(params = {}) {
-    return apiClient.get('/tracks/', { params })
+    return retryRequest(() => apiClient.get('/tracks/', { params }))
   },
   
   getTrack(id) {
-    return apiClient.get(`/tracks/${id}/`)
+    return retryRequest(() => apiClient.get(`/tracks/${id}/`))
   },
   
   createTrack(trackData) {
-    return apiClient.post('/tracks/', trackData)
+    return retryRequest(() => apiClient.post('/tracks/', trackData))
   },
   
   updateTrack(id, trackData) {
-    return apiClient.patch(`/tracks/${id}/`, trackData)
+    return retryRequest(() => apiClient.patch(`/tracks/${id}/`, trackData))
   },
   
   deleteTrack(id) {
-    return apiClient.delete(`/tracks/${id}/`)
+    return retryRequest(() => apiClient.delete(`/tracks/${id}/`))
   },
-  
+
   // Artists
   getArtists(params = {}) {
-    return apiClient.get('/artists/', { params })
+    return retryRequest(() => apiClient.get('/artists/', { params }))
   },
   
   createArtist(artistData) {
-    return apiClient.post('/artists/', artistData)
+    return retryRequest(() => apiClient.post('/artists/', artistData))
   },
-  
+
+  deleteArtist(id) {
+    return retryRequest(() =>
+      apiClient.delete(`/artists/${id}/`)
+    )
+  },
+
   // Albums
   getAlbums(params = {}) {
-    return apiClient.get('/albums/', { params })
+    return retryRequest(() => apiClient.get('/albums/', { params }))
   },
   
   createAlbum(albumData) {
-    return apiClient.post('/albums/', albumData)
+    return retryRequest(() => apiClient.post('/albums/', albumData))
   },
-  
+
+   deleteAlbum(id) {
+    return retryRequest(() =>
+      apiClient.delete(`/albums/${id}/`)
+    )
+  },
+
   // Streaming
   streamAudio(params) {
-    return apiClient.get('/streamer/', { params })
+    return retryRequest(() => apiClient.get('/streamer/', { params }))
   }
 }

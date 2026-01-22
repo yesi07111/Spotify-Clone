@@ -1,3 +1,4 @@
+# code/app/views.py
 import uuid
 import logging
 import hashlib
@@ -18,6 +19,7 @@ from .serializers import (
     TrackSerializer,
 )
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
@@ -38,7 +40,7 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
-@leader_only
+# @leader_only
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     
@@ -47,7 +49,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         from raft.utils import get_leader_manager
         self.leader_manager = get_leader_manager()
 
-@leader_only
+# @leader_only
 class CustomTokenRefreshView(TokenRefreshView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -79,7 +81,7 @@ class CustomTokenRefreshView(TokenRefreshView):
         
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
-@leader_only
+# @leader_only
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     
@@ -93,21 +95,51 @@ class RegisterView(APIView):
         
         if serializer.is_valid():
             try:
-                # ✅ USAR EL SERIALIZER PARA CREAR EL USUARIO
-                user = serializer.save()  # Esto ejecuta RegisterSerializer.create()
+                # ✅ NO guardar todavía, solo validar
+                validated_data = serializer.validated_data
+                logger.info(f"[REGISTER] Datos validados: {validated_data.get('username')}")
                 
-                logger.info(f"[REGISTER] Usuario creado por serializer: {user.username}")
-                logger.info(f"[REGISTER] Password después de create: {user.password[:80]}...")
+                # ✅ Crear instancia de usuario SIN guardar en BD
+                validated_data["id"] = str(uuid.uuid4())
+
+                user = User(**validated_data)
+                user.set_password(validated_data['password'])  # Hashear contraseña
                 
-                # Coordinar escritura distribuida (si es necesario)
-                result = self.leader_manager.write_metadata(user, "create")
+                if User.objects.filter(username=user.username).exists() or (validated_data.get("email") and validated_data["email"] is not None and validated_data["email"] != "" and User.objects.filter(email=user.email).exists()):
+                    return Response({"error": "Ya existe un usuario con esas credenciales"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # ✅ Coordinar creación distribuida (esto creará el usuario en la BD)
+                result = self.leader_manager.manage_metadata(user, "create")
+                
+                if not result.get("success", False):
+                    return Response(
+                        {"error": "Error en la creación distribuida del usuario"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                # ✅ Recuperar usuario creado por el sistema distribuido
+                # Necesitamos obtener el ID asignado
+                try:
+                    user_created = User.objects.get(username=validated_data['username'])
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": "Usuario no encontrado después de creación"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
                 
                 # Generar tokens JWT
-                refresh = RefreshToken.for_user(user)
-                refresh['token_version'] = user.refresh_token_version
+                refresh = RefreshToken.for_user(user_created)
+                refresh['token_version'] = user_created.refresh_token_version
+                
+                send_user = UserSerializer(user_created).data
+                # Esto es solo para mostrar en frontend, no afecta la BD
+                import random
+                send_user["id"] = "USER_" + str(random.randint(1_000_000_000, 9_999_999_999))
                 
                 response_data = {
-                    'user': UserSerializer(user).data,
+                    'user': send_user,
                     'access': str(refresh.access_token),
                     'refresh': str(refresh),
                     'message': 'Usuario registrado exitosamente.'
@@ -123,7 +155,8 @@ class RegisterView(APIView):
                 )
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-@leader_only
+
+# @leader_only
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -147,7 +180,7 @@ class LogoutView(APIView):
             request.user.invalidate_refresh_tokens()
             
             # Coordinar invalidación distribuida
-            self.leader_manager.write_metadata(request.user, "update")
+            self.leader_manager.manage_metadata(request.user, "update")
             
             return Response(
                 {"message": "Sesión cerrada exitosamente"},
@@ -160,7 +193,7 @@ class LogoutView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-@leader_only
+# @leader_only
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -210,7 +243,7 @@ class ProfileView(APIView):
                     setattr(request.user, attr, value)
                 
                 # Coordinar actualización distribuida
-                result = self.leader_manager.write_metadata(request.user, "update")
+                result = self.leader_manager.manage_metadata(request.user, "update")
                 
                 return Response(
                     UserSerializer(request.user).data,
@@ -226,7 +259,7 @@ class ProfileView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@leader_only
+# @leader_only
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -240,24 +273,44 @@ class ChangePasswordView(APIView):
         
         if serializer.is_valid():
             try:
-                # Verificar contraseña actual
-                current_password_hash = serializer.validated_data['current_password']
-                new_password_hash = serializer.validated_data['new_password']
+                # ✅ Recibimos TEXTO PLANO del frontend
+                current_password = serializer.validated_data['current_password']
+                new_password = serializer.validated_data['new_password']
                 
-                # El frontend envía hash SHA256, aplicamos verificación
-                if not request.user.check_password(current_password_hash):
+                logger.info(f"[CHANGE PASSWORD] Usuario: {request.user.username}")
+                logger.info(f"[CHANGE PASSWORD] Current password length: {len(current_password)}")
+                logger.info(f"[CHANGE PASSWORD] New password length: {len(new_password)}")
+                logger.info(f"[CHANGE PASSWORD] Password en BD (primeros 20): {request.user.password[:20]}")
+                
+                # ✅ Verificar contraseña actual (texto plano vs pbkdf2)
+                password_check = request.user.check_password(current_password)
+                logger.info(f"[CHANGE PASSWORD] check_password result: {password_check}")
+                
+                if not password_check:
+                    logger.warning(f"[CHANGE PASSWORD] Contraseña actual incorrecta para {request.user.username}")
                     return Response(
                         {"current_password": ["Contraseña actual incorrecta"]},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
-                # Cambiar contraseña
-                from django.contrib.auth.hashers import make_password
-                request.user.password = make_password(new_password_hash)
-                request.user.invalidate_refresh_tokens()  # Invalidar tokens existentes
+                # ✅ NO guardar todavía - solo modificar en memoria
+                request.user.set_password(new_password)
+                request.user.invalidate_refresh_tokens()
                 
-                # Coordinar actualización distribuida
-                self.leader_manager.write_metadata(request.user, "update")
+                logger.info(f"[CHANGE PASSWORD] Nueva contraseña seteada (primeros 20): {request.user.password[:20]}")
+                logger.info(f"[CHANGE PASSWORD] Iniciando manage_metadata...")
+                
+                # ✅ Coordinar actualización distribuida (esto guardará)
+                result = self.leader_manager.manage_metadata(request.user, "update")
+                
+                if not result:
+                    logger.error(f"[CHANGE PASSWORD] manage_metadata falló")
+                    return Response(
+                        {"error": "Error en actualización distribuida"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                logger.info(f"[CHANGE PASSWORD] Contraseña cambiada exitosamente para {request.user.username}")
                 
                 return Response(
                     {"message": "Contraseña cambiada exitosamente"},
@@ -265,15 +318,18 @@ class ChangePasswordView(APIView):
                 )
                 
             except Exception as e:
-                logger.error(f"Error cambiando contraseña: {e}")
+                logger.error(f"[CHANGE PASSWORD] Error completo: {e}", exc_info=True)
+                import traceback
+                logger.error(f"[CHANGE PASSWORD] Traceback: {traceback.format_exc()}")
                 return Response(
-                    {"error": "Error al cambiar contraseña"},
+                    {"error": f"Error al cambiar contraseña: {str(e)}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
         
+        logger.error(f"[CHANGE PASSWORD] Serializer errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-@leader_only
+    
+# @leader_only
 class VerifyEmailView(APIView):
     permission_classes = [AllowAny]
     
@@ -302,7 +358,7 @@ class VerifyEmailView(APIView):
                     # Coordinar actualización distribuida
                     from raft.utils import get_leader_manager
                     leader_manager = get_leader_manager()
-                    leader_manager.write_metadata(user, "update")
+                    leader_manager.manage_metadata(user, "update")
                     
                     return Response(
                         {"message": "Email verificado exitosamente"},
@@ -323,7 +379,7 @@ class VerifyEmailView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@leader_only
+# @leader_only
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
     
@@ -368,7 +424,7 @@ class PasswordResetRequestView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@leader_only
+# @leader_only
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
     
@@ -403,7 +459,7 @@ class PasswordResetConfirmView(APIView):
                     user.invalidate_refresh_tokens()
                     
                     # Coordinar actualización distribuida
-                    self.leader_manager.write_metadata(user, "update")
+                    self.leader_manager.manage_metadata(user, "update")
                     
                     return Response(
                         {"message": "Contraseña restablecida exitosamente"},
@@ -424,7 +480,7 @@ class PasswordResetConfirmView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@leader_only
+# @leader_only
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -436,29 +492,29 @@ class DeleteAccountView(APIView):
     def delete(self, request):
         try:
             user = request.user
+            user_id = user.id
             
-            # Coordinar eliminación distribuida
-            self.leader_manager.write_metadata(user, "delete")
+            # ✅ Coordinar eliminación distribuida ANTES de invalidar tokens
+            self.leader_manager.manage_metadata(user, "delete")
             
             # Invalidar todos los tokens
             user.invalidate_refresh_tokens()
             
-            # En un sistema real, podríamos marcar como inactivo en lugar de eliminar
-            # user.is_active = False
-            # user.save()
+            logger.info(f"[DELETE ACCOUNT] Cuenta {user.username} eliminada exitosamente")
             
+            user.delete()
             return Response(
                 {"message": "Cuenta eliminada exitosamente"},
                 status=status.HTTP_200_OK
             )
             
         except Exception as e:
-            logger.error(f"Error eliminando cuenta: {e}")
+            logger.error(f"Error eliminando cuenta: {e}", exc_info=True)
             return Response(
-                {"error": "Error al eliminar la cuenta"},
+                {"error": f"Error al eliminar la cuenta: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
+        
 # # Añadir estas vistas al UserViewSet si se quiere manejar usuarios como API REST
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
@@ -483,7 +539,7 @@ class UserViewSet(viewsets.ModelViewSet):
         view.format_kwarg = self.format_kwarg
         return view.post(request)
 
-@leader_only
+# @leader_only
 class AudioStreamerView(APIView):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -531,7 +587,7 @@ class AudioStreamerView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         
-@leader_only
+# @leader_only
 class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all()
     serializer_class = ArtistSerializer
@@ -540,8 +596,9 @@ class ArtistViewSet(viewsets.ModelViewSet):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from raft.leader_manager import LeaderManager
         from raft.utils import get_leader_manager
-        self.leader_manager = get_leader_manager()
+        self.leader_manager: LeaderManager = get_leader_manager()
 
     def get_queryset(self):
         """Filtrar artistas por usuario actual"""
@@ -597,12 +654,13 @@ class ArtistViewSet(viewsets.ModelViewSet):
             artist = Artist(**artist_data)
             import logging
             if not artist.id:
-                logging.info("\nArtistView - create - Asignando nuevo UUID al artista")
                 artist.id = str(uuid.uuid4())
             
-            logging.info("\nArtistView - create - A punto de llamar al write_metadata")
             # Coordinar escritura distribuida
-            result = self.leader_manager.write_metadata(artist, "create")
+            result = self.leader_manager.manage_metadata(artist, "create")
+
+            if not result:
+                return Response({"error": "No se pudo crear el artista por problemas de servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             return Response(result, status=status.HTTP_201_CREATED)
         
@@ -611,7 +669,62 @@ class ArtistViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-@leader_only
+        
+    def destroy(self, request, *args, **kwargs):
+        """
+        DELETE - Elimina un artista usando escritura distribuida (2PC)
+        """
+        try:
+            user = request.user
+            if not user.is_authenticated:
+                return Response(
+                    {"error": "Usuario no autenticado"},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+
+            artist_id = kwargs["id"]
+
+            # Verificar que el artista existe y pertenece al usuario
+            artist_data = self.leader_manager.read_metadata({
+                "model": "artist",
+                "filters": {"id": artist_id, "user_id": str(user.id)}
+            })
+
+            if not artist_data:
+                return Response(
+                    {"error": "Artist no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Crear objeto Artist mínimo para delete
+            artist = Artist(id=artist_id, user=user, name=artist_data[0]["name"])
+
+            # Eliminar metadata con 2PC
+            delete_result = self.leader_manager.manage_metadata(
+                artist, "delete"
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Artista eliminado correctamente",
+                    "data": delete_result.get("data")
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            import traceback
+            return Response(
+                {
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# @leader_only
 class AlbumViewSet(viewsets.ModelViewSet):
     queryset = Album.objects.all()
     serializer_class = AlbumSerializer
@@ -621,7 +734,8 @@ class AlbumViewSet(viewsets.ModelViewSet):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from raft.utils import get_leader_manager
-        self.leader_manager = get_leader_manager()
+        from raft.leader_manager import LeaderManager
+        self.leader_manager: LeaderManager = get_leader_manager()
 
     def get_queryset(self):
         """Filtrar álbumes por usuario actual"""
@@ -655,8 +769,6 @@ class AlbumViewSet(viewsets.ModelViewSet):
             # Leer desde nodo óptimo
             data = self.leader_manager.read_metadata(query_data)
 
-            import logging
-            logging.info(f"\nAlbumView - list")
             return Response(data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -675,7 +787,7 @@ class AlbumViewSet(viewsets.ModelViewSet):
                 "filters": {"id": kwargs["id"], "user_id": str(user.id)}
             })
             if not data:
-                return Response({"error": "Album not found"}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "Album no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
             return Response(data[0], status=status.HTTP_200_OK)
         except Exception as e:
@@ -693,16 +805,70 @@ class AlbumViewSet(viewsets.ModelViewSet):
                 validated["id"] = str(uuid.uuid4())
 
             obj = Album(**validated)
-            import logging
-            logging.info("\nAlbumView - create - Antes de llamar a write_metadata")
-            result = self.leader_manager.write_metadata(obj, "create")
+            result = self.leader_manager.manage_metadata(obj, "create")
+
+            if not result:
+                return Response({"error": "No se pudo crear el album por problemas de servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             return Response(result, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+    def destroy(self, request, *args, **kwargs):
+        """
+        DELETE - Elimina un álbum usando escritura distribuida (2PC)
+        """
+        try:
+            user = request.user
+            if not user.is_authenticated:
+                return Response(
+                    {"error": "Usuario no autenticado"},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
 
-@leader_only
+            album_id = kwargs["id"]
+
+            # Verificar que el álbum existe y pertenece al usuario
+            album_data = self.leader_manager.read_metadata({
+                "model": "album",
+                "filters": {"id": album_id, "user_id": str(user.id)}
+            })
+
+            if not album_data:
+                return Response(
+                    {"error": "Album no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Crear objeto Album mínimo para delete
+            album = Album(id=album_id, user=user, name=album_data[0]["name"])
+
+            # Eliminar metadata con 2PC
+            delete_result = self.leader_manager.manage_metadata(
+                album, "delete"
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Álbum eliminado correctamente",
+                    "data": delete_result.get("data")
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            import traceback
+            return Response(
+                {
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# @leader_only
 class TrackViewSet(viewsets.ModelViewSet):
     queryset = Track.objects.all()
     serializer_class = TrackSerializer
@@ -712,7 +878,8 @@ class TrackViewSet(viewsets.ModelViewSet):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from raft.utils import get_leader_manager
-        self.leader_manager = get_leader_manager()
+        from raft.leader_manager import LeaderManager
+        self.leader_manager: LeaderManager = get_leader_manager()
 
     def get_queryset(self):
         """Filtrar tracks por usuario actual"""
@@ -762,6 +929,43 @@ class TrackViewSet(viewsets.ModelViewSet):
                 "filters": filters
             })
 
+            complete_data = []
+            for track_data in data:
+                artist_names_arr = []
+                artist_names = ""
+
+                artist_ids = track_data.get("artist", [])
+                if artist_ids:
+                    artists = self.leader_manager.read_metadata({
+                        "model": "artist",
+                        "filters": {
+                            "id__in": artist_ids,
+                            "user_id": str(user.id)
+                        }
+                    })
+                    artist_names_arr = [a["name"] for a in artists]
+                    artist_names = ", ".join(artist_names_arr)
+
+                track_data["artist_names"] = artist_names
+
+                album_name = ""
+                album_id = track_data.get("album")
+
+                if album_id:
+                    album_data = self.leader_manager.read_metadata({
+                        "model": "album",
+                        "filters": {
+                            "id": album_id,
+                            "user_id": str(user.id)
+                        }
+                    })
+                    if album_data:
+                        album_name = album_data[0]["name"]
+
+                track_data["album_name"] = album_name
+                complete_data.append(track_data)
+
+
             return Response(data, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -784,9 +988,42 @@ class TrackViewSet(viewsets.ModelViewSet):
             })
 
             if not data:
-                return Response({"error": "Track not found"}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "Audio no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
             track_data = data[0]
+
+            artist_names_arr = []
+            artist_names = ""
+
+            artist_ids = track_data.get("artist", [])
+            if artist_ids:
+                artists = self.leader_manager.read_metadata({
+                    "model": "artist",
+                    "filters": {
+                        "id__in": artist_ids,
+                        "user_id": str(user.id)
+                    }
+                })
+                artist_names_arr = [a["name"] for a in artists]
+                artist_names = ", ".join(artist_names_arr)
+
+            track_data["artist_names"] = artist_names
+
+            album_name = ""
+            album_id = track_data.get("album")
+
+            if album_id:
+                album_data = self.leader_manager.read_metadata({
+                    "model": "album",
+                    "filters": {
+                        "id": album_id,
+                        "user_id": str(user.id)
+                    }
+                })
+                if album_data:
+                    album_name = album_data[0]["name"]
+
+            track_data["album_name"] = album_name
 
             # include_audio
             include_audio = request.query_params.get("include_audio", "false").lower() == "true"
@@ -801,6 +1038,8 @@ class TrackViewSet(viewsets.ModelViewSet):
                 track_data["audio_chunks"] = [base64.b64encode(c).decode() for c in chunks]
                 track_data["chunk_index"] = chunk_index
                 track_data["chunk_count"] = len(chunks)
+                # track_data["artist_names"] =  
+                # track_data["album_name"] = 
 
             return Response(track_data, status=status.HTTP_200_OK)
 
@@ -822,7 +1061,7 @@ class TrackViewSet(viewsets.ModelViewSet):
             
             file_base64 = request.data.get("file_base64")
             if not file_base64:
-                return Response({"error": "file_base64 is required"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "file_base64 es campo requerido"}, status=status.HTTP_400_BAD_REQUEST)
             
             file_data = base64.b64decode(file_base64)
             
@@ -861,6 +1100,15 @@ class TrackViewSet(viewsets.ModelViewSet):
             # Combinar hash del archivo con user_id
             combined_string = f"{file_hash}_{str(user.id)}"
             track_id = hashlib.sha256(combined_string.encode()).hexdigest()
+
+            # Comprobar si ya existe una canción con ese id (se subió el mismo archivo)
+            exist = self.leader_manager.read_metadata({
+                "model": "track",
+                "filters": {"id": track_id, "user_id": str(user.id)}
+            }) 
+
+            if exist:
+                return Response({"error": "Ese archivo de audio ya fue subido."}, status=status.HTTP_201_CREATED)
             
             # Asignar ID generado
             track_data["id"] = track_id
@@ -872,19 +1120,19 @@ class TrackViewSet(viewsets.ModelViewSet):
             track._artist_ids = artist_ids
             
             # 1. Primero escribir el archivo distribuido
-            filename = f"{track.id}.{track.extension}"
-            import logging 
-            logging.info(f"\nTrackView - create - Antes de llamar a write_file con ID generado: {track.id}")
-            write_file = self.leader_manager.write_file(filename, file_data)
+            manage_file = self.leader_manager.manage_file(track.id, file_data, operation="create", real_name=track.title)
             
             # 2. Luego escribir metadata con 2PC
-            write_meta = self.leader_manager.write_metadata(track, "create")
+            write_meta = self.leader_manager.manage_metadata(track, "create")
+
+            if not write_meta:
+                return Response({"error": "No se pudo crear la canción por problemas de servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             return Response(
                 {
                     "success": True,
                     "data": write_meta.get("data"),
-                    "file_distribution": write_file.get("distribution"),
+                    "file_distribution": manage_file.get("distribution"),
                     "track_id": track.id  # Retornar ID generado
                 },
                 status=status.HTTP_201_CREATED
@@ -899,4 +1147,143 @@ class TrackViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    def update(self, request, *args, **kwargs):
+        """
+        Actualiza un track usando LeaderManager. Funciona para PUT y PATCH.
+        """
+        import logging
+        from app.models import Track
+
+        try:
+            user = request.user
+
+            if not user.is_authenticated:
+                return Response(
+                    {"error": "Usuario no autenticado"},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+
+            track_id = kwargs.get("id")
+            if not track_id:
+                return Response({"error": "ID de track requerido"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Obtener metadata actual del track
+            existing_data = self.leader_manager.read_metadata({
+                "model": "track",
+                "filters": {"id": track_id, "user_id": str(user.id)}
+            })
+
+            if not existing_data:
+                return Response({"error": "Track no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+            track_instance_dict = existing_data[0]
+
+            # Convertir dict a objeto Track usando _deserialize_to_object
+            track_instance = self.leader_manager.raft_server.db_instance._deserialize_to_object(
+                track_instance_dict, "track"
+            )
+
+            # Validar datos entrantes con serializer
+            serializer = self.get_serializer(data=request.data, partial=True)  # partial=True permite PATCH
+            serializer.is_valid(raise_exception=True)
+            validated_data = serializer.validated_data
+
+            # No permitir cambiar ciertos campos sensibles
+            validated_data.pop("file_base64", None)
+            validated_data.pop("user", None)
+            validated_data.pop("id", None)
+
+            # Extraer artistas si vienen
+            artist_data = validated_data.pop("artist", None)
+            if artist_data:
+                artist_ids = [a.id for a in artist_data]
+                setattr(track_instance, "_artist_ids", artist_ids)
+
+            # Actualizar los campos permitidos en el objeto Track
+            for k, v in validated_data.items():
+                setattr(track_instance, k, v)
+
+            # Llamar a LeaderManager para escribir metadata (update)
+            update_result = self.leader_manager.manage_metadata(track_instance, "update")
+
+            if not update_result:
+                return Response({"error": "No se pudo actualizar la canción por problemas de servidor"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response({
+                "success": True,
+                "data": update_result.get("data")
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import traceback
+            return Response({
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Elimina un track completo (metadatos + archivo de audio)
+        """
+        try:
+            user = request.user
+            if not user.is_authenticated:
+                return Response(
+                    {"error": "Usuario no autenticado"},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            track_id = kwargs["id"]
+
+            # Verificar que el track existe y pertenece al usuario
+            track_data = self.leader_manager.read_metadata({
+                "model": "track",
+                "filters": {"id": track_id, "user_id": str(user.id)}
+            })
+
+            if not track_data:
+                return Response(
+                    {"error": "Track no encontrado"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Deserializar el track completo en lugar de crear uno vacío
+            track = self.leader_manager.raft_server.db_instance._deserialize_to_object(
+                track_data[0], "track"
+            )
+
+            # 1. Eliminar archivo de audio distribuido
+            delete_file_result = self.leader_manager.manage_file(track_id, None, operation="delete", real_name=track.title)
+            
+            # 2. Eliminar metadatos con 2PC
+            delete_meta_result = self.leader_manager.manage_metadata(track, "delete")
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Track eliminado correctamente",
+                    "file_deletion": delete_file_result,
+                    "metadata_deletion": delete_meta_result
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            import traceback
+            return Response(
+                {
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+    # Para soportar PATCH explícitamente
+    def partial_update(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+    
+
+
+
 

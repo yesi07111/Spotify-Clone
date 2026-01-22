@@ -3,6 +3,7 @@ import requests
 from functools import wraps
 from django.http import HttpResponse
 
+
 from raft.utils import am_i_leader, get_leader_id
 import time 
 
@@ -27,6 +28,7 @@ def leader_only(cls):
         "update",
         "partial_update",
         "destroy",
+        "authenticate",
     }
 
     logger.info(f"[leader_only] Decorating class {cls.__name__}")
