@@ -2,7 +2,8 @@
 node_modules
 /dist
 latex
-
+git*
+node_modules*
 
 # local env files
 .env.local
